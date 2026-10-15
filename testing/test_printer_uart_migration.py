@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 from app import printer_uart
@@ -11,6 +12,8 @@ SCRIPT_PATH = (
 
 
 def _migration_env(tmp_path: Path) -> tuple[dict[str, str], dict[str, Path]]:
+    true_bin = shutil.which("true")
+    assert true_bin is not None, "UART migration tests require true on PATH"
     boot_dir = tmp_path / "boot"
     boot_dir.mkdir()
     config_file = boot_dir / "config.txt"
@@ -46,8 +49,8 @@ def _migration_env(tmp_path: Path) -> tuple[dict[str, str], dict[str, Path]]:
         "PC1_PRINTER_UART_SETUP_MARKER": str(paths["setup_marker"]),
         "PC1_SERIAL0_PATH": str(paths["serial0"]),
         "PC1_BOOT_ID_FILE": str(paths["boot_id"]),
-        "PC1_SYSTEMCTL_BIN": "/usr/bin/true",
-        "PC1_SYSTEMD_RUN_BIN": "/usr/bin/true",
+        "PC1_SYSTEMCTL_BIN": true_bin,
+        "PC1_SYSTEMD_RUN_BIN": true_bin,
     }
     return env, paths
 

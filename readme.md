@@ -103,6 +103,43 @@ If WiFi setup fails, PC-1 returns to setup mode so the user can try again.
 
 Project commands assume a Unix-like shell environment. On Windows, use WSL.
 
+#### Nix development shell
+
+With Nix installed and the `nix-command` and `flakes` features enabled:
+
+```bash
+nix develop
+
+# Backend (mock hardware on non-Pi hosts)
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# In another terminal, also inside nix develop:
+npm --prefix web ci
+npm --prefix web run dev
+
+# Tests and print snapshots
+python -m pytest -q testing
+python testing/render_all_prints.py --output-dir testing/artifacts/print
+```
+
+The flake provides Python 3.12, the application/test dependencies, Node.js 22
+(including npm), and launcher utilities on Linux and macOS, for x86-64 and ARM64.
+`flake.lock` pins the Nix package set; frontend dependencies use
+`web/package-lock.json`. The first shell entry downloads the Nix dependencies;
+`npm ci` separately installs the frontend dependencies.
+
+Use the direct `python` commands above in this shell rather than
+`testing/run_tests.sh`, which creates a pip-managed `.venv`. Likewise, `run.sh`
+prefers an existing `.venv`, so the direct backend command ensures it uses the
+Nix-provided Python. Enter the shell without an activated virtual environment.
+No `.venv` is created or modified by the flake. If Python requirements change,
+update the package list in `flake.nix` as well.
+
+The settings UI screenshot helper has an additional Playwright/browser setup
+requirement; browser binaries are not included in this development shell.
+
+#### Python virtual environment
+
 First-time setup:
 
 ```bash
