@@ -12,7 +12,6 @@ pip-log.txt
 pip-delete-this-directory.txt
 *.egg-info/
 dist/
-!web/dist/
 build/
 
 # Node.js
@@ -23,8 +22,8 @@ yarn-error.log*
 pnpm-debug.log*
 # Note: package-lock.json should be committed for reproducible builds
 
-# Build outputs
-# web/dist/
+# Build outputs (the settings UI is built locally or in the container image)
+web/dist/
 web/dist-ssr/
 release-artifacts/
 *.local

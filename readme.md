@@ -2,6 +2,12 @@
 
 **A small, self-hosted thermal printer for news, weather, puzzles, email, and more.**
 
+> This fork is migrating to a container + ESP32-S3 architecture. The container
+> handles application logic and pushes print commands over HTTP; the ESP32 will
+> provide WiFi setup/link-status UI, relay physical inputs over HTTP, and drive a
+> CSN-A2 printer over TTL UART. See the [migration plan](docs/container-esp32-plan.md)
+> for implementation progress. ESP32 transport/firmware is not implemented yet.
+
 ---
 
 * **No screens:** output is physical thermal paper.
@@ -47,53 +53,29 @@ npm run dev
 ./testing/run_tests.sh
 ```
 
-### Unboxing & First-Use Experience
+### First Use (This Fork)
 
-When a user unboxes a PC-1 and powers it on for the first time, the expected flow is:
+The container does not manage WiFi, run a captive portal, or print setup
+receipts. Network onboarding moves to the ESP32-S3 firmware (captive portal and
+link-status UI), which is not implemented yet.
 
-1. **First boot prints setup receipt**
-   - The printer automatically outputs onboarding instructions.
-   - It includes:
-     - Setup SSID: `PC-1-Setup-XXXX` (device-specific suffix)
-     - Device Password (shared across setup WiFi, settings login, printed setup instructions, and SSH)
-     - A WiFi QR code for quickly joining the setup network on phones
-     - Setup URL: `http://10.42.0.1` (and `http://pc-1.local`)
+1. Start the server with `PC1_DEVICE_PASSWORD` set (see the development section below).
+2. Open the settings UI and log in with that password.
+3. Configure channels, modules, and schedules.
 
-2. **User connects to setup WiFi**
-   - On phone/computer, scan the printed WiFi QR code or connect to the printed SSID manually.
-   - If connecting manually, enter the printed Device Password.
-   - Many phones and laptops should open the setup page automatically as a captive portal after joining.
+**Physical controls** (relayed by the ESP32 once implemented; currently mock/GPIO):
 
-3. **User configures home WiFi in the setup web UI**
-   - If the setup page does not open automatically, open `http://10.42.0.1`
-   - Choose home network and enter password.
-   - The UI explains that connection may drop while PC-1 switches networks.
+- Turn the dial to select a channel (1-8); press the button to print it.
+- Hold ~5 seconds, then release, for **Quick Actions**:
+  - `1` Table of Contents
+  - `2` System Monitor
+  - `5` Reset application settings
+  - `8` Cancel
+- Quick Actions are single-shot and auto-exit after 2 minutes without a choice.
+- Hold ~15 seconds to reset application settings.
 
-4. **PC-1 joins home WiFi**
-   - Device attempts connection in the background.
-   - On success, PC-1 prints a confirmation receipt.
-   - User reconnects their phone/computer to home WiFi.
-
-5. **User opens settings**
-   - Visit `http://pc-1.local`
-   - Configure channels/modules and print behavior.
-
-6. **Normal daily usage**
-   - Turn dial to select channel (1-8)
-   - Press button to print selected channel
-   - Hold button ~5 seconds (half-line paper cue appears at threshold), then release to open **Quick Actions**:
-     - `1` Table of Contents
-     - `2` System Monitor
-     - `3` Reprint Setup Instructions
-     - `4` Reset WiFi
-     - `5` Reset Factory Settings
-     - `8` Cancel
-   - Quick Actions are single-shot: after you pick an option, the menu exits automatically.
-   - If no option is selected for 2 minutes, Quick Actions auto-exits and prints a timeout note.
-   - Hold button ~15 seconds for **Factory Reset** (clears settings and reboots)
-   - Use Web UI anytime for editing modules, schedules, and system settings
-
-If WiFi setup fails, PC-1 returns to setup mode so the user can try again.
+Resetting restores default channels/modules only. It does not change the server
+password, networking, or restart the host.
 
 ---
 
@@ -114,6 +96,7 @@ With Nix installed and the `nix-command` and `flakes` features enabled:
 nix develop
 
 # Backend (mock hardware on non-Pi hosts)
+export PC1_DEVICE_PASSWORD='choose-your-local-server-password'
 just backend
 
 # In another terminal, also inside nix develop:
@@ -126,13 +109,21 @@ python testing/render_all_prints.py --output-dir testing/artifacts/print
 ```
 
 Run `just` to list recipes. `just backend` watches only `app/`, so installing
-frontend dependencies does not restart the backend. Optional examples:
+frontend dependencies does not restart the backend. `web/dist` is not committed;
+run `just frontend-build` (then restart the backend) to serve the built UI from
+the backend port instead of the Vite dev server. Optional examples:
 
 ```bash
 just backend 0.0.0.0 8000   # Allow access from other devices on the LAN
 just frontend --host 0.0.0.0
 just test -k printer        # Forward arguments to pytest
 ```
+
+Log into the settings UI using the `PC1_DEVICE_PASSWORD` value exported in the
+backend terminal. The existing password header and signed browser sessions remain
+supported, but being on a local/setup network no longer bypasses login. Server
+startup does not configure host WiFi or print boot receipts; scheduled prints and
+explicit print actions still operate normally.
 
 The flake provides `just`, Python 3.12, the application/test dependencies, Node.js 22
 (including npm), and launcher utilities on Linux and macOS, for x86-64 and ARM64.
@@ -209,8 +200,9 @@ If you want to run PC-1 without Raspberry Pi hardware, you can also run the app 
 4. **Open the app:**
    Visit `http://localhost:8000` in your browser.
 
-5. **Find the device password:**
-   Check the container logs for the printed setup output, especially the `STEP 1: CONNECT TO WIFI` section.
+5. **Set the server password:**
+   Pass `-e PC1_DEVICE_PASSWORD=...` to `docker run` and use it to log in. (Proper
+   container packaging is planned in Step 4 of the migration plan.)
 
 6. **Use the mock printer:**
    When you print a channel from the web UI, the output appears in the terminal running the container.
@@ -290,7 +282,7 @@ These workflows use mock/local paths and do not require Raspberry Pi GPIO packag
 ### Security & Network Environment Variables
 For production deployments, configure these environment variables:
 
-* **`PC1_DEVICE_PASSWORD`**: Optional override for the unified Device Password used by setup WiFi, settings login, printed setup instructions, and SSH.  
+* **`PC1_DEVICE_PASSWORD`**: Server password for settings login and the `X-PC1-Device-Password` API header. Set this explicitly for this fork.
   On managed PC-1 devices, the runtime password is normally stored in the device-managed credential file instead. For scripted access, clients may send header `X-PC1-Device-Password`.
 * **Settings Login Sessions**: The web UI can remember a browser with a signed `HttpOnly` session cookie so users do not need to re-enter the password on every visit.
 * **`PC1_CORS_ORIGINS`**: Comma-separated CORS origins (default is local/dev origins only).
@@ -328,13 +320,13 @@ paper-console/
 │   ├── auth.py                 # Device-password auth and session helpers
 │   ├── config.py               # Settings, channels, schedules, module models
 │   ├── device_password.py      # Unified device password storage/loading
-│   ├── factory_reset.py        # Factory reset helpers and welcome marker reset
+│   ├── factory_reset.py        # Application settings reset (no host changes)
 │   ├── hardware.py             # Printer + dial/button singletons
 │   ├── location_lookup.py      # City/timezone lookup helpers
 │   ├── module_registry.py      # @register_module metadata and validation
 │   ├── selection_mode.py       # Dial-driven interactive selection flows
+│   ├── qr_payloads.py          # QR content encoders (WiFi/contact QR modules)
 │   ├── utils.py
-│   ├── wifi_manager.py         # Setup AP and WiFi connection orchestration
 │   ├── data/                   # Bundled offline content and lookup datasets
 │   ├── drivers/
 │   │   ├── printer_serial.py   # Thermal printer (hardware)
@@ -363,10 +355,8 @@ paper-console/
 │   │   ├── webhook.py
 │   │   ├── wordsearch.py
 │   │   └── wotd.py
-│   └── routers/
-│       └── wifi.py
 ├── web/                        # React + Vite + Tailwind settings UI
-│   ├── src/                    # App UI, WiFi setup, shared constants/styles
+│   ├── src/                    # Settings UI, shared constants/styles
 │   ├── public/                 # Static icons/assets
 │   ├── package.json
 │   └── vite.config.js
@@ -433,7 +423,7 @@ paper-console/
 
 **History:** Offline “on this day” events; optional event count in config.
 
-**System Monitor:** Hostname, IP, WiFi, disk/memory bars, uptime, load, CPU temp (where available).
+**System Monitor:** Server hostname, IP, disk/memory bars, uptime, load, CPU temp (where available).
 
 **Word of the Day:** Merriam Webster's word of the day
 

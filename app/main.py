@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, Response
 from contextlib import asynccontextmanager
 import asyncio
 import uuid
@@ -121,9 +121,7 @@ from app.module_registry import (
 from app.modules import email_client, webhook, text, calendar, weather
 import app.print_webhook_service as print_webhook_service
 
-from app.routers import wifi
 import app.device_password as device_password
-import app.wifi_manager as wifi_manager
 import app.hardware as hardware
 from app.hardware import (
     printer,
@@ -691,8 +689,6 @@ def _write_long_press_menu_compact(position: int):
     printer.print_caption(f"Dial: {position}")
     printer.print_body("[1] Table of contents")
     printer.print_body("[2] System monitor")
-    printer.print_body("[3] Reprint setup instructions")
-    printer.print_body("[4] Reset WiFi")
     printer.print_body("[5] Reset Factory Settings")
     printer.print_caption("[8] Cancel")
     printer.print_caption("Turn dial, press button")
@@ -772,10 +768,10 @@ def _confirm_quick_factory_reset(printer, module_id: str):
     printer.print_bold("WARNING")
     printer.print_body("")
     printer.print_body("This will delete ALL")
-    printer.print_body("settings and reboot.")
+    printer.print_body("application settings.")
     printer.print_body("")
-    printer.print_body("WiFi passwords, module")
-    printer.print_body("configs, and channels")
+    printer.print_body("Module configurations")
+    printer.print_body("and channels")
     printer.print_body("will be erased.")
     printer.print_line()
     printer.print_subheader("ARE YOU SURE?")
@@ -813,42 +809,39 @@ def _confirm_quick_factory_reset(printer, module_id: str):
     )
 
 
+def _reset_application_settings():
+    """Reset persisted and live settings without changing the host or credentials."""
+    global settings
+    from app.factory_reset import perform_factory_reset
+    import app.config as config_module
+
+    result = perform_factory_reset()
+    if result["config_cleared"]:
+        settings = config_module.settings
+        if global_loop and global_loop.is_running():
+            asyncio.run_coroutine_threadsafe(slack_manager.reconcile(), global_loop)
+    return result
+
+
 def _do_quick_factory_reset(printer):
     """Perform a confirmed factory reset from Quick Actions."""
-    from app.factory_reset import perform_factory_reset
-    from app.utils import print_setup_instructions_sync
 
     printer.print_header("RESETTING...", icon="alert")
     printer.print_line()
     printer.print_body("Clearing all settings...")
-    printer.print_body("Device will reboot.")
+    printer.print_body("Server will stay running.")
     printer.print_line()
     printer.feed(1)
 
     if hasattr(printer, "flush_buffer"):
         printer.flush_buffer()
 
-    result = perform_factory_reset()
-    if not result.get("reboot_requested", False):
+    result = _reset_application_settings()
+    if not result.get("config_cleared", False):
         logger.error(
-            "Factory reset from Quick Actions failed to request reboot: %s",
+            "Application settings reset failed: %s",
             "; ".join(result.get("errors", [])),
         )
-        try:
-            if wifi_manager.start_ap_mode(retries=2):
-                print_setup_instructions_sync()
-                if hasattr(printer, "reset_buffer"):
-                    printer.reset_buffer()
-                printer.print_header("RESET COMPLETE", icon="check")
-                printer.print_body("Reboot failed.")
-                printer.print_body("Setup mode started.")
-                printer.print_bold("Connect to PC-1-Setup-XXXX")
-                printer.print_caption("Then open: http://10.42.0.1")
-                printer.print_line()
-                if hasattr(printer, "flush_buffer"):
-                    printer.flush_buffer()
-        except Exception:
-            logger.exception("Factory reset fallback AP-mode recovery failed")
 
 
 async def long_press_menu_trigger():
@@ -899,19 +892,6 @@ async def long_press_menu_trigger():
             _print_system_monitor()
             return
 
-        if dial_position == 3:
-            exit_selection_mode()
-            from app.utils import print_setup_instructions_sync
-
-            print_setup_instructions_sync()
-            return
-
-        if dial_position == 4:
-            exit_selection_mode()
-            if global_loop and global_loop.is_running():
-                asyncio.run_coroutine_threadsafe(manual_ap_mode_trigger(), global_loop)
-            return
-
         if dial_position == 5:
             exit_selection_mode()
             try:
@@ -929,7 +909,7 @@ async def long_press_menu_trigger():
     enter_selection_mode(
         _handle_quick_action,
         quick_actions_id,
-        valid_positions={1, 2, 3, 4, 5, 8},
+        valid_positions={1, 2, 5, 8},
     )
     # Release lock only after quick-actions selection mode is fully active.
     clear_print_reservation(clear_hold=False)
@@ -962,294 +942,12 @@ async def long_press_menu_trigger():
     asyncio.create_task(_auto_exit_quick_actions_after_timeout(quick_actions_id))
 
 
-from app.utils import print_setup_instructions_sync, print_setup_wifi_access_details
-
-
-async def print_setup_instructions():
-    """Prints the WiFi setup instructions.
-    Runs blocking printer operations in a thread pool to avoid blocking the event loop.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    from app.selection_mode import exit_selection_mode
-
-    # Cancel any active interactive mode
-    exit_selection_mode()
-
-    try:
-        # Run blocking printer operations in thread pool to avoid blocking event loop
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            await loop.run_in_executor(executor, print_setup_instructions_sync)
-    except Exception as e:
-        logger.error(f"Error in print_setup_instructions: {e}", exc_info=True)
-
-
-def _get_welcome_marker_path() -> str:
-    """Get path to the welcome message marker file."""
-    import app.config as config_module
-
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(config_module.__file__)))
-    return os.path.join(base_dir, ".welcome_printed")
-
-
-async def check_first_boot():
-    """Check if this is first boot and print welcome message.
-    Runs blocking printer operations in a thread pool to avoid blocking the event loop.
-    """
-    marker_path = _get_welcome_marker_path()
-    from concurrent.futures import ThreadPoolExecutor
-    from app.selection_mode import exit_selection_mode
-
-    # Cancel any active interactive mode
-    exit_selection_mode()
-
-    # Wait for printer to be ready (applies to all boots)
-    await asyncio.sleep(2)
-
-    # Check if marker exists first (this is fast, doesn't need thread pool)
-    is_first_boot = not os.path.exists(marker_path)
-
-    def _do_print():
-        """Synchronous function that does the actual printing work."""
-        try:
-            # Force hardware printer into a clean baseline before startup receipts.
-            if hasattr(printer, "clear_hardware_buffer"):
-                printer.clear_hardware_buffer()
-            if hasattr(printer, "reset_buffer"):
-                printer.reset_buffer()
-
-            # If marker exists, just print ready message
-            if not is_first_boot:
-                # Visual header with inline icon (no feed before - content starts immediately)
-                printer.print_header("SYSTEM READY", icon="check", icon_size=28)
-
-                from app.config import format_print_datetime
-
-                printer.print_bold(format_print_datetime())
-
-                printer.print_line()
-
-                # Show channel assignments
-                printer.print_subheader("CHANNELS")
-
-                import app.config as config_module
-
-                configured_settings = config_module.settings
-
-                # Show all 8 channels
-                for channel_num in range(1, 9):
-                    channel = configured_settings.channels.get(channel_num)
-                    if channel and channel.modules:
-                        # Get module names
-                        module_names = []
-                        for mod_assignment in sorted(
-                            channel.modules, key=lambda m: m.order
-                        ):
-                            module_id = mod_assignment.module_id
-                            if module_id in configured_settings.modules:
-                                module = configured_settings.modules[module_id]
-                                module_names.append(module.name)
-
-                        if module_names:
-                            modules_str = " + ".join(module_names)
-                            printer.print_body(f"  {channel_num}. {modules_str}")
-                    else:
-                        printer.print_caption(f"  {channel_num}. (empty)")
-
-                # Flush buffer (spacing is built into bitmap)
-                if hasattr(printer, "flush_buffer"):
-                    printer.flush_buffer()
-                return
-            else:
-                # First boot! Print welcome message
-                ssid = wifi_manager.get_ap_ssid()
-                ap_password = wifi_manager.get_ap_password()
-
-                # Welcome header with icon (no feed before - content starts immediately)
-                printer.print_header("WELCOME")
-                printer.print_icon("home", size=56)
-
-                printer.print_bold("PC-1 Paper Console")
-                printer.print_body("Your personal printer for")
-                printer.print_body("weather, news, puzzles,")
-                printer.print_body("and more.")
-                printer.print_line()
-
-                # Setup instructions
-                printer.print_subheader("SETUP INSTRUCTIONS")
-                printer.print_line()
-
-                # Step 1
-                printer.print_bold("STEP 1: CONNECT TO WIFI")
-                printer.print_icon("wifi", size=32)
-                printer.print_body("On your phone or computer,")
-                printer.print_body("connect to WiFi network:")
-                printer.print_line()
-                print_setup_wifi_access_details(
-                    printer,
-                    ssid=ssid,
-                    password=ap_password,
-                )
-                printer.print_line()
-
-                # Step 2
-                printer.print_bold("STEP 2: OPEN SETUP PAGE")
-                printer.print_icon("arrow_right", size=32)
-                printer.print_body("Visit in your browser:")
-                printer.print_line()
-                printer.print_bold("  http://10.42.0.1")
-                printer.print_caption("  (or http://pc-1.local)")
-                printer.print_line()
-
-                # Step 3
-                printer.print_bold("STEP 3: CONFIGURE WIFI")
-                printer.print_icon("settings", size=32)
-                printer.print_body("Select your home WiFi and")
-                printer.print_body("enter the password.")
-                printer.print_caption("PC-1 will remember it.")
-                printer.print_line()
-
-                # After setup section
-                printer.print_subheader("AFTER SETUP")
-                printer.print_line()
-                printer.print_body("Turn the dial to select a")
-                printer.print_body("channel, then press the")
-                printer.print_body("button to print!")
-                printer.print_line()
-
-                printer.print_bold("Default Channels:")
-                for channel_num in range(1, 9):
-                    channel = settings.channels.get(channel_num)
-                    if channel and channel.modules:
-                        module_names = []
-                        for mod_assignment in sorted(
-                            channel.modules, key=lambda m: m.order
-                        ):
-                            module_id = mod_assignment.module_id
-                            if module_id in settings.modules:
-                                module = settings.modules[module_id]
-                                module_names.append(module.name)
-
-                        if module_names:
-                            modules_str = " + ".join(module_names)
-                            printer.print_body(f"  {channel_num}. {modules_str}")
-                        else:
-                            printer.print_caption(f"  {channel_num}. (empty)")
-                    else:
-                        printer.print_caption(f"  {channel_num}. (empty)")
-                printer.print_line()
-
-                printer.print_caption("Customize channels at:")
-                printer.print_bold("  http://pc-1.local")
-                printer.print_line()
-
-                printer.print_subheader("QUICK HELP")
-                printer.print_body("Button 5s = Quick actions")
-                printer.print_body("Button 15s = Reset all")
-                printer.feed(1)
-
-                # Flush buffer to print (spacing is built into bitmap)
-                if hasattr(printer, "flush_buffer"):
-                    printer.flush_buffer()
-
-                # Create marker file so we don't print again
-                try:
-                    with open(marker_path, "w") as f:
-                        f.write("1")
-                except Exception:
-                    logger.warning(
-                        "Could not write first-boot marker file at %s",
-                        marker_path,
-                        exc_info=True,
-                    )
-        except Exception as e:
-            logger.error(f"System Ready print error: {e}", exc_info=True)
-
-    try:
-        # Run blocking printer operations in thread pool to avoid blocking event loop
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            await loop.run_in_executor(executor, _do_print)
-    except Exception as e:
-        logger.error(f"Error in check_first_boot: {e}", exc_info=True)
-
-
-async def check_wifi_startup():
-    """Check WiFi status on startup and enter AP mode if needed."""
-    startup_was_first_boot = not os.path.exists(_get_welcome_marker_path())
-
-    # Give system time to connect to saved WiFi
-    await asyncio.sleep(10)
-
-    status = wifi_manager.get_wifi_status()
-
-    if not status["connected"] and status["mode"] != "ap":
-        success = wifi_manager.start_ap_mode(retries=3)
-
-        if success:
-            await asyncio.sleep(5)
-            if startup_was_first_boot:
-                logger.info(
-                    "Skipping duplicate startup setup receipt because first-boot receipt already includes setup instructions."
-                )
-                return
-            await print_setup_instructions()
-        else:
-            # Schedule periodic retry in the background
-            asyncio.create_task(periodic_wifi_recovery())
-
-
-async def periodic_wifi_recovery():
-    """Periodically check if we need to recover WiFi/AP mode. Runs forever until success."""
-    retry_interval = 300  # 5 minutes
-
-    while True:
-        await asyncio.sleep(retry_interval)
-
-        status = wifi_manager.get_wifi_status()
-
-        # Exit if we have connectivity
-        if status["connected"] or status["mode"] == "ap":
-            return
-
-        # Try to start AP mode
-        success = wifi_manager.start_ap_mode(retries=2)
-        if success:
-            await asyncio.sleep(5)
-            await print_setup_instructions()
-            return
-
-
-async def manual_ap_mode_trigger():
-    """Manually trigger AP mode."""
-    logger.info("Manual AP mode trigger initiated")
-
-    from app.selection_mode import exit_selection_mode
-
-    exit_selection_mode()
-
-    # Print instructions BEFORE switching network mode
-    await print_setup_instructions()
-
-    # Give a small delay for the printer buffer to flush/finish
-    await asyncio.sleep(2)
-
-    logger.info("Starting AP mode...")
-    success = wifi_manager.start_ap_mode()
-
-    if success:
-        logger.info("AP mode started successfully")
-    else:
-        logger.error("AP mode failed to start - check wifi_ap_nmcli.sh script")
-
-
 async def factory_reset_trigger():
-    """Factory reset (button hold 15+ seconds) - deletes config and reboots.
+    """Reset application settings (button hold 15+ seconds).
     Runs blocking printer operations in a thread pool to avoid blocking the event loop.
     """
     from concurrent.futures import ThreadPoolExecutor
     from app.selection_mode import exit_selection_mode
-    from app.factory_reset import perform_factory_reset
 
     exit_selection_mode()
 
@@ -1268,8 +966,8 @@ async def factory_reset_trigger():
         printer.print_text("     FACTORY RESET")
         printer.print_text("")
         printer.print_text("  All settings will be")
-        printer.print_text("  cleared. Device will")
-        printer.print_text("  reboot in setup mode.")
+        printer.print_text("  cleared. Server will")
+        printer.print_text("  stay running.")
         printer.print_text("")
         printer.print_text("=" * 32)
         printer.feed(2)
@@ -1286,26 +984,19 @@ async def factory_reset_trigger():
                 await loop.run_in_executor(executor, _print_reset_message)
         except Exception:
             logger.warning(
-                "Factory reset pre-reboot receipt failed to print",
+                "Factory reset receipt failed to print",
                 exc_info=True,
             )  # Continue reset flow even if print fails
 
         # Wait for print to complete
         await asyncio.sleep(3)
 
-        reset_result = perform_factory_reset()
-        if not reset_result.get("reboot_requested", False):
+        reset_result = _reset_application_settings()
+        if not reset_result.get("config_cleared", False):
             logger.error(
-                "Factory reset finished but reboot could not be requested: %s",
+                "Application settings reset failed: %s",
                 "; ".join(reset_result.get("errors", [])),
             )
-            # Fallback: try to make the device recoverable without reboot.
-            try:
-                if wifi_manager.start_ap_mode(retries=2):
-                    await asyncio.sleep(1)
-                    await print_setup_instructions()
-            except Exception:
-                logger.exception("Factory reset fallback AP-mode recovery failed")
     finally:
         clear_print_reservation()
 
@@ -1354,17 +1045,9 @@ async def lifespan(app: FastAPI):
             "Printer driver is unavailable at startup; hardware printing may fail until serial is restored."
         )
 
-    if platform.system() == "Linux":
-        try:
-            _repair_wifi_power_save_persistence()
-        except Exception:
-            logger.exception("WiFi powersave persistence repair failed at startup")
-
-    # Check for first boot and print welcome message
-    asyncio.create_task(check_first_boot())
-
-    # Check WiFi and start AP mode if needed
-    asyncio.create_task(check_wifi_startup())
+    # The server does not provision host networking or print on restart.
+    # WiFi onboarding belongs to the ESP32; printing must be explicitly requested
+    # by an input/API action or an application producer such as the scheduler.
 
     # Start background tasks
     email_polling_task = asyncio.create_task(email_polling_loop())
@@ -1430,7 +1113,6 @@ app.add_middleware(
 )
 
 # Include WiFi router
-app.include_router(wifi.router)
 
 
 # --- CORE API ---
@@ -1532,14 +1214,6 @@ async def health_check():
             module_id: status.get("status", "unknown")
             for module_id, status in slack_statuses.items()
         }
-
-    # Check WiFi status
-    try:
-        wifi_status = wifi_manager.get_wifi_status()
-        health["components"]["wifi"] = wifi_status.get("mode", "unknown")
-        health["wifi_connected"] = wifi_status.get("connected", False)
-    except Exception as e:
-        health["components"]["wifi"] = f"error: {e}"
 
     # Check hardware drivers
     health["components"]["printer"] = (
@@ -1755,16 +1429,10 @@ async def import_settings(
 @app.post("/api/settings/reset", dependencies=[Depends(require_admin_access)])
 async def reset_settings(background_tasks: BackgroundTasks):
     """Resets all settings to their default values."""
-    global settings
-
-    # Create fresh settings instance (uses defaults from config.py)
-    settings = Settings()
-
-    # Save to disk (overwriting existing config.json)
-    background_tasks.add_task(save_settings_background, settings.model_copy(deep=True))
-    background_tasks.add_task(slack_manager.reconcile)
-
-    return {"message": "Settings reset to defaults", "config": settings}
+    result = await asyncio.to_thread(_reset_application_settings)
+    if not result["config_cleared"]:
+        raise HTTPException(status_code=500, detail="Could not reset application settings")
+    return {"message": "Settings reset to defaults", "config": settings, "warnings": result["errors"]}
 
 
 @app.post("/api/settings/reload", dependencies=[Depends(require_admin_access)])
@@ -3114,93 +2782,6 @@ def _install_update_dependencies(
     )
 
 
-def _disable_wifi_power_save_for_saved_connections() -> bool:
-    """Best-effort OTA migration for deployed units with existing WiFi profiles."""
-    try:
-        list_result = subprocess.run(
-            ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-        if list_result.returncode != 0:
-            logger.warning(
-                "Could not list NetworkManager connections for power-save migration: %s",
-                (list_result.stderr or list_result.stdout or "").strip()[:300],
-            )
-            return False
-
-        wifi_connection_uuids = []
-        for line in list_result.stdout.splitlines():
-            parts = line.split(":")
-            if len(parts) >= 2:
-                connection_uuid, conn_type = parts[0].strip(), parts[1].strip()
-                if connection_uuid and conn_type == "802-11-wireless":
-                    wifi_connection_uuids.append(connection_uuid)
-
-        modified_any = False
-        for connection_uuid in wifi_connection_uuids:
-            modify_result = subprocess.run(
-                [
-                    "sudo",
-                    "nmcli",
-                    "connection",
-                    "modify",
-                    "uuid",
-                    connection_uuid,
-                    "802-11-wireless.powersave",
-                    "2",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-            if modify_result.returncode == 0:
-                modified_any = True
-                continue
-
-            logger.warning(
-                "Could not disable WiFi power saving for connection %s: %s",
-                connection_uuid,
-                (modify_result.stderr or modify_result.stdout or "").strip()[:300],
-            )
-
-        if modified_any:
-            subprocess.run(
-                ["sudo", "nmcli", "connection", "reload"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-            subprocess.run(
-                ["sudo", "nmcli", "device", "reapply", "wlan0"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-
-        return modified_any
-    except Exception:
-        logger.warning(
-            "WiFi power-save OTA migration failed unexpectedly", exc_info=True
-        )
-        return False
-
-
-def _repair_wifi_power_save_persistence() -> bool:
-    """Best-effort runtime repair for persistent WiFi powersave disablement."""
-    if platform.system() != "Linux":
-        return False
-
-    helper_ok = wifi_manager.ensure_wifi_powersave_disabled()
-    profile_ok = _disable_wifi_power_save_for_saved_connections()
-    return helper_ok or profile_ok
-
-
 def _validate_production_update_bundle(source_dir: Path) -> None:
     required_paths = [
         source_dir / "web" / "dist" / "index.html",
@@ -3297,9 +2878,6 @@ async def install_updates():
                 "message": "Update failed",
                 "error": "Dependency installation failed. The running service was left unchanged.",
             }
-
-        if not is_dev:
-            _repair_wifi_power_save_persistence()
 
         # Dev-mode convenience only: production releases must ship prebuilt web assets.
         web_dir = project_root / "web"
@@ -3471,7 +3049,9 @@ async def get_ssh_status():
         username = _get_system_username()
 
         # Get current IP address (useful as a fallback when mDNS is flaky)
-        ip_address = wifi_manager.get_wifi_status().get("ip")
+        from app.utils import get_primary_ip
+
+        ip_address = get_primary_ip()
 
         # Check if raspi-config SSH is enabled (if on Raspberry Pi)
         raspi_ssh_enabled = None
@@ -3668,16 +3248,6 @@ def _sync_device_password_to_system_user(new_password: str) -> Dict[str, object]
     }
 
 
-def _restart_ap_mode_after_device_password_change() -> None:
-    try:
-        time.sleep(1)
-        wifi_manager.stop_ap_mode()
-        time.sleep(1)
-        wifi_manager.start_ap_mode(retries=2)
-    except Exception:
-        logger.exception("Failed to restart AP mode after Device Password change")
-
-
 class DevicePasswordChange(BaseModel):
     current_password: str
     new_password: str
@@ -3685,9 +3255,6 @@ class DevicePasswordChange(BaseModel):
 
 @app.get("/api/system/device-password/status")
 async def get_device_password_status():
-    if platform.system() == "Linux" and device_password.is_device_managed():
-        wifi_manager.ensure_managed_device_password_store()
-
     managed = device_password.is_device_managed()
     can_change = device_password.can_change_device_password()
     source = device_password.get_device_password_source()
@@ -3695,7 +3262,7 @@ async def get_device_password_status():
     if source == "managed_file":
         status_label = "Managed on Device"
         message = (
-            "Changing the Device Password updates settings login, setup WiFi, printed setup instructions, and SSH access."
+            "Changing the Device Password updates settings login and SSH access on managed legacy devices."
         )
     elif source == "managed_fallback":
         status_label = "Built-in Device Password"
@@ -3744,11 +3311,8 @@ async def change_device_password(
     response: Response,
     background_tasks: BackgroundTasks,
 ):
-    """Change the canonical Device Password used by settings, setup WiFi, and SSH."""
+    """Change the password used by settings and legacy managed-device SSH."""
     try:
-        if platform.system() == "Linux" and device_password.is_device_managed():
-            wifi_manager.ensure_managed_device_password_store()
-
         if not device_password.can_change_device_password():
             return {
                 "success": False,
@@ -3777,7 +3341,6 @@ async def change_device_password(
             }
 
         previous_password = device_password.get_device_password()
-        ap_mode_was_active = wifi_manager.is_ap_mode_active()
 
         try:
             device_password.set_device_password(new_password)
@@ -3808,9 +3371,6 @@ async def change_device_password(
                 "message": str(exc),
             }
 
-        if ap_mode_was_active:
-            background_tasks.add_task(_restart_ap_mode_after_device_password_change)
-
         clear_admin_session_cookie(
             response,
             secure=request.url.scheme == "https",
@@ -3819,10 +3379,6 @@ async def change_device_password(
         message_parts = ["Device Password changed successfully."]
         if sync_result.get("synced") and sync_result.get("message"):
             message_parts.append(sync_result["message"] + ".")
-        if ap_mode_was_active:
-            message_parts.append(
-                "Setup WiFi is restarting. Reconnect using the new Device Password."
-            )
 
         return {
             "success": True,
@@ -3830,7 +3386,6 @@ async def change_device_password(
             "reauth_required": True,
             "ssh_password_synced": bool(sync_result.get("synced")),
             "username": sync_result.get("username"),
-            "ap_mode_restarting": ap_mode_was_active,
         }
 
     except Exception as e:
@@ -5181,109 +4736,6 @@ async def preview_webhook(config: dict):
         return {"success": False, "error": str(e)}
 
 
-# --- CAPTIVE PORTAL (Auto-launch setup page) ---
-
-
-CAPTIVE_PORTAL_REDIRECT_URL = "http://10.42.0.1/"
-CAPTIVE_PORTAL_CACHE_BYPASS_HEADERS = {
-    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-    "Pragma": "no-cache",
-    "Expires": "0",
-}
-
-
-def _captive_portal_is_active() -> bool:
-    """Return True when the local setup AP is active."""
-    try:
-        return wifi_manager.is_ap_mode_active()
-    except Exception:
-        return False
-
-
-def _captive_portal_redirect() -> RedirectResponse:
-    """Redirect probe clients to the setup UI with no-cache headers."""
-    response = RedirectResponse(url=CAPTIVE_PORTAL_REDIRECT_URL, status_code=302)
-    for header_name, header_value in CAPTIVE_PORTAL_CACHE_BYPASS_HEADERS.items():
-        response.headers[header_name] = header_value
-    return response
-
-
-def _captive_portal_response(
-    *,
-    content: str = "",
-    status_code: int = 200,
-    media_type: str = "text/plain",
-) -> Response:
-    response = Response(content=content, status_code=status_code, media_type=media_type)
-    for header_name, header_value in CAPTIVE_PORTAL_CACHE_BYPASS_HEADERS.items():
-        response.headers[header_name] = header_value
-    return response
-
-
-@app.get("/hotspot-detect.html")
-@app.get("/library/test/success.html")
-@app.get("/success.html")
-async def captive_apple():
-    """iOS/macOS captive portal detection - redirect to setup page."""
-    if _captive_portal_is_active():
-        return _captive_portal_redirect()
-    return _captive_portal_response(
-        content="<!DOCTYPE html><html><head><title>Success</title></head><body>Success</body></html>",
-        media_type="text/html",
-    )
-
-
-@app.get("/generate_204")
-@app.get("/gen_204")
-@app.get("/mobile/status.php")
-async def captive_android():
-    """Android captive portal detection - redirect to setup page."""
-    if _captive_portal_is_active():
-        return _captive_portal_redirect()
-    return _captive_portal_response(status_code=204)
-
-
-@app.get("/connecttest.txt")
-async def captive_windows_connect_test():
-    """Windows 10+ captive portal detection."""
-    if _captive_portal_is_active():
-        return _captive_portal_redirect()
-    return _captive_portal_response(content="Microsoft Connect Test")
-
-
-@app.get("/ncsi.txt")
-async def captive_windows_ncsi():
-    """Windows 8.1 and earlier captive portal detection."""
-    if _captive_portal_is_active():
-        return _captive_portal_redirect()
-    return _captive_portal_response(content="Microsoft NCSI")
-
-
-@app.get("/redirect")
-async def captive_windows_redirect():
-    """Windows passive connectivity redirect target."""
-    if _captive_portal_is_active():
-        return _captive_portal_redirect()
-    return _captive_portal_response(status_code=204)
-
-
-@app.get("/success.txt")
-@app.get("/canonical.html")
-async def captive_other():
-    """Generic captive portal detection used by various clients."""
-    if _captive_portal_is_active():
-        return _captive_portal_redirect()
-    return _captive_portal_response(content="success\n")
-
-
-@app.get("/check_network_status.txt")
-async def captive_networkmanager():
-    """NetworkManager/Linux captive portal detection."""
-    if _captive_portal_is_active():
-        return _captive_portal_redirect()
-    return _captive_portal_response(content="NetworkManager is online\n")
-
-
 # --- STATIC FILES (FRONTEND) ---
 
 # Mount the built React app
@@ -5314,19 +4766,10 @@ if os.path.exists("web/dist"):
     async def serve_favicon():
         return FileResponse("web/dist/favicon.svg", media_type="image/svg+xml")
 
-    # Serve index.html for the root and any client-side routes
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        # If path starts with api/, let it fall through to API routes
-        # Fonts are handled by the mount above, so they won't reach here
-        if (
-            full_path.startswith("api/")
-            or full_path.startswith("docs")
-            or full_path.startswith("openapi.json")
-        ):
-            raise HTTPException(status_code=404, detail="Not found")
-
-        # Otherwise serve the React app
+    # The settings UI uses tabs, not client-side URL routes. Unknown paths,
+    # including retired captive-portal probes, must return 404 instead of the UI.
+    @app.get("/")
+    async def serve_frontend():
         return FileResponse("web/dist/index.html")
 
 else:

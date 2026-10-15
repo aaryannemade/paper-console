@@ -17,6 +17,10 @@ frontend-install:
 frontend *args:
     npm --prefix web run dev -- "$@"
 
+# Build the settings UI into web/dist so the backend can serve it on its own port.
+frontend-build:
+    npm --prefix web run build
+
 # Run the backend tests; accepts additional pytest arguments.
 test *args:
     python -m pytest -q testing "$@"

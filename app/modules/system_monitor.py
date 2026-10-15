@@ -4,8 +4,7 @@ import os
 import logging
 from datetime import datetime
 from typing import Dict, Any
-from app.wifi_manager import get_wifi_status
-from app.utils import wrap_text
+from app.utils import get_primary_ip
 from app.module_registry import register_module
 from app.config import format_print_datetime
 from PIL import Image, ImageDraw
@@ -42,14 +41,11 @@ def format_system_monitor_receipt(
         logger.debug("Hostname lookup failed in system monitor", exc_info=True)
         hostname = "unknown"
 
-    wifi_status = get_wifi_status()
-    ip_address = wifi_status.get("ip") or "No IP"
-    ssid = wifi_status.get("ssid") or "Disconnected"
+    ip_address = get_primary_ip() or "Unavailable"
 
     printer.print_subheader("NETWORK")
     printer.print_body(f"Host: {hostname}")
     printer.print_body(f"IP:   {ip_address}")
-    printer.print_body(f"WiFi: {ssid}")
     printer.print_line()
 
     # Disk Usage

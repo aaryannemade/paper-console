@@ -3,52 +3,20 @@
 import base64
 import hashlib
 import hmac
-import ipaddress
 import json
 import os
 import time
 from typing import Dict, Optional
-from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, Response
 
 import app.device_password as device_password
-import app.wifi_manager as wifi_manager
 
 AUTH_REQUIRED_HEADER = "X-PC1-Auth-Required"
 TOKEN_HEADER = "X-PC1-Device-Password"
 SESSION_COOKIE_NAME = "pc1_admin_session"
 REMEMBER_DURATION_SECONDS = 365 * 24 * 60 * 60
 SESSION_DURATION_SECONDS = 12 * 60 * 60
-
-
-def _host_is_private_or_local(host: Optional[str]) -> bool:
-    if not host:
-        return False
-
-    # Handle values like "127.0.0.1:12345".
-    if ":" in host and host.count(":") == 1:
-        host = host.split(":")[0]
-
-    lowered = host.lower()
-    if lowered in {"localhost", "pc-1.local"}:
-        return True
-
-    try:
-        addr = ipaddress.ip_address(host)
-        return addr.is_loopback or addr.is_private or addr.is_link_local
-    except ValueError:
-        return False
-
-
-def _origin_is_local(origin: Optional[str]) -> bool:
-    if not origin:
-        return False
-    try:
-        parsed = urlparse(origin)
-        return _host_is_private_or_local(parsed.hostname)
-    except Exception:
-        return False
 
 
 def _urlsafe_b64encode(raw: bytes) -> str:
@@ -176,20 +144,9 @@ def clear_admin_session_cookie(response: Response, *, secure: bool = False) -> N
     )
 
 
-def _allow_setup_mode_without_auth(request: Request) -> bool:
-    if not wifi_manager.is_ap_mode_active():
-        return False
-    client_host = request.client.host if request.client else None
-    origin = request.headers.get("origin")
-    return _host_is_private_or_local(client_host) or _origin_is_local(origin)
-
-
 def require_admin_access(request: Request):
     """Protect privileged endpoints with header or signed-session auth."""
     if is_admin_authenticated(request):
-        return
-
-    if _allow_setup_mode_without_auth(request):
         return
 
     raise HTTPException(
@@ -201,28 +158,15 @@ def require_admin_access(request: Request):
 
 def get_admin_auth_status(request: Optional[Request] = None) -> Dict[str, object]:
     """Return privileged endpoint auth mode without exposing secrets."""
-    if wifi_manager.is_ap_mode_active():
-        return {
-            "login_required": False,
-            "authenticated": True,
-            "auth_mode": "setup_network",
-            "password_label": "Device Password",
-            "message": "Setup mode is active. Settings login is bypassed on the local setup network.",
-            "password_help": "Connect to the printed setup WiFi to continue onboarding.",
-            "session_supported": False,
-            "remember_supported": False,
-            "device_password_source": device_password.get_device_password_source(),
-            "device_password_managed": device_password.is_device_managed(),
-        }
-
     return {
         "login_required": True,
         "authenticated": is_admin_authenticated(request) if request else False,
         "auth_mode": "device_password",
         "password_label": "Device Password",
-        "message": "Enter the Device Password from the printed setup instructions to access settings.",
+        "message": "Enter the server password to access settings.",
         "password_help": (
-            "This browser can remember your login with a signed secure session cookie."
+            "Use the password configured with PC1_DEVICE_PASSWORD on the server. "
+            "This browser can remember your login with a signed session cookie."
         ),
         "session_supported": True,
         "remember_supported": True,

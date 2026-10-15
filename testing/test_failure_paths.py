@@ -14,7 +14,6 @@ import pytest
 
 import app.main as main_module
 import app.hardware as hardware_module
-import app.wifi_manager as wifi_manager
 from app.config import CalendarConfig, ChannelConfig, ChannelModuleAssignment, ModuleInstance
 from app.drivers.printer_serial import PrinterDriver
 from app.drivers.printer_mock import PrinterDriver as MockPrinterDriver
@@ -23,167 +22,7 @@ from app.modules import quotes as quotes_module
 from app.modules import news as news_module
 from app.modules import calendar as calendar_module
 from app.modules import history as history_module
-from app import factory_reset as factory_reset_module
 from datetime import date, datetime, timedelta, timezone
-
-
-def _completed(returncode: int = 0, stdout: str = "", stderr: str = ""):
-    return subprocess.CompletedProcess(
-        args=["nmcli"], returncode=returncode, stdout=stdout, stderr=stderr
-    )
-
-
-def test_connect_to_wifi_returns_false_when_profile_creation_fails(monkeypatch):
-    def fake_run_command(cmd, check=False):  # noqa: ARG001
-        if "add" in cmd:
-            return _completed(returncode=1, stderr="failed to create profile")
-        return _completed(returncode=0)
-
-    monkeypatch.setattr(wifi_manager, "run_command", fake_run_command)
-
-    assert wifi_manager.connect_to_wifi("TestSSID", "password123") is False
-
-
-def test_connect_to_wifi_disables_powersave_on_new_profile(monkeypatch):
-    invocations = []
-
-    def fake_run_command(cmd, check=False):  # noqa: ARG001
-        invocations.append(list(cmd))
-        return _completed(returncode=0)
-
-    monkeypatch.setattr(wifi_manager, "run_command", fake_run_command)
-
-    assert wifi_manager.connect_to_wifi("TestSSID", "password123") is True
-
-    powersave_modifies = [
-        cmd
-        for cmd in invocations
-        if cmd[:4] == ["sudo", "nmcli", "connection", "modify"]
-        and "802-11-wireless.powersave" in cmd
-    ]
-    assert len(powersave_modifies) == 1
-    cmd = powersave_modifies[0]
-    assert "TestSSID" in cmd
-    assert cmd[cmd.index("802-11-wireless.powersave") + 1] == "2"
-
-
-def test_start_ap_mode_retries_then_succeeds(monkeypatch):
-    start_attempts = {"count": 0}
-
-    def fake_run_command(cmd, check=False):  # noqa: ARG001
-        if cmd[-1] == "start":
-            start_attempts["count"] += 1
-            if start_attempts["count"] < 2:
-                return _completed(returncode=1, stderr="first start failed")
-        return _completed(returncode=0)
-
-    monkeypatch.setattr(wifi_manager, "run_command", fake_run_command)
-    monkeypatch.setattr(time, "sleep", lambda *_: None)
-
-    assert wifi_manager.start_ap_mode(retries=3, retry_delay=0) is True
-    assert start_attempts["count"] == 2
-
-
-def test_start_ap_mode_returns_false_after_all_retries(monkeypatch):
-    def fake_run_command(cmd, check=False):  # noqa: ARG001
-        if cmd[-1] == "start":
-            return _completed(returncode=1, stderr="all starts failed")
-        return _completed(returncode=0)
-
-    monkeypatch.setattr(wifi_manager, "run_command", fake_run_command)
-    monkeypatch.setattr(time, "sleep", lambda *_: None)
-
-    assert wifi_manager.start_ap_mode(retries=2, retry_delay=0) is False
-
-
-def test_ensure_managed_device_password_store_invokes_privileged_script(monkeypatch):
-    commands = []
-
-    def fake_run_command(cmd, check=False):  # noqa: ARG001
-        commands.append(cmd)
-        return _completed(returncode=0)
-
-    monkeypatch.setattr(wifi_manager, "run_command", fake_run_command)
-
-    assert wifi_manager.ensure_managed_device_password_store() is True
-    assert commands
-    assert commands[0][-1] == "ensure-password-store"
-
-
-def test_ensure_wifi_powersave_disabled_invokes_privileged_script(monkeypatch):
-    commands = []
-
-    def fake_run_command(cmd, check=False):  # noqa: ARG001
-        commands.append(cmd)
-        return _completed(returncode=0)
-
-    monkeypatch.setattr(wifi_manager, "run_command", fake_run_command)
-
-    assert wifi_manager.ensure_wifi_powersave_disabled() is True
-    assert commands
-    assert commands[0][-1] == "ensure-wifi-powersave-off"
-
-
-def test_check_wifi_startup_skips_duplicate_setup_receipt_on_first_boot(monkeypatch):
-    sleep_calls = []
-    print_calls = []
-    ap_calls = []
-
-    async def fake_sleep(seconds):
-        sleep_calls.append(seconds)
-
-    async def fake_print_setup():
-        print_calls.append("setup")
-
-    monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(main_module.os.path, "exists", lambda _path: False)
-    monkeypatch.setattr(
-        main_module.wifi_manager,
-        "get_wifi_status",
-        lambda: {"connected": False, "mode": "client"},
-    )
-    monkeypatch.setattr(
-        main_module.wifi_manager,
-        "start_ap_mode",
-        lambda retries=3: ap_calls.append(retries) or True,
-    )
-    monkeypatch.setattr(main_module, "print_setup_instructions", fake_print_setup)
-
-    asyncio.run(main_module.check_wifi_startup())
-
-    assert ap_calls == [3]
-    assert print_calls == []
-    assert sleep_calls == [10, 5]
-
-
-def test_check_wifi_startup_prints_setup_receipt_on_regular_boot(monkeypatch):
-    print_calls = []
-    ap_calls = []
-
-    async def fake_sleep(_seconds):
-        return None
-
-    async def fake_print_setup():
-        print_calls.append("setup")
-
-    monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(main_module.os.path, "exists", lambda _path: True)
-    monkeypatch.setattr(
-        main_module.wifi_manager,
-        "get_wifi_status",
-        lambda: {"connected": False, "mode": "client"},
-    )
-    monkeypatch.setattr(
-        main_module.wifi_manager,
-        "start_ap_mode",
-        lambda retries=3: ap_calls.append(retries) or True,
-    )
-    monkeypatch.setattr(main_module, "print_setup_instructions", fake_print_setup)
-
-    asyncio.run(main_module.check_wifi_startup())
-
-    assert ap_calls == [3]
-    assert print_calls == ["setup"]
 
 
 def test_email_polling_loop_uses_configured_interval_for_auto_print(monkeypatch):
@@ -689,11 +528,6 @@ def test_install_updates_uses_beta_release_channel_in_production(monkeypatch, tm
             args=["pip"], returncode=0, stdout="", stderr=""
         ),
     )
-    monkeypatch.setattr(
-        main_module,
-        "_disable_wifi_power_save_for_saved_connections",
-        lambda: True,
-    )
     monkeypatch.setattr(main_module, "_restart_pc1_service", lambda: None)
 
     result = asyncio.run(main_module.install_updates())
@@ -706,66 +540,15 @@ def test_install_updates_uses_beta_release_channel_in_production(monkeypatch, tm
     assert captured["include_prerelease"] is True
 
 
-def test_disable_wifi_power_save_updates_saved_wireless_profiles(monkeypatch):
-    commands = []
-
-    def fake_run(
-        cmd, capture_output=False, text=False, timeout=None, check=False, cwd=None
-    ):  # noqa: ARG001
-        commands.append(cmd)
-        if cmd == ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"]:
-            return subprocess.CompletedProcess(
-                args=cmd,
-                returncode=0,
-                stdout="wifi-uuid:802-11-wireless\nethernet-uuid:802-3-ethernet\n",
-                stderr="",
-            )
-        if cmd == [
-            "sudo",
-            "nmcli",
-            "connection",
-            "modify",
-            "uuid",
-            "wifi-uuid",
-            "802-11-wireless.powersave",
-            "2",
-        ]:
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        if cmd == ["sudo", "nmcli", "connection", "reload"]:
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        if cmd == ["sudo", "nmcli", "device", "reapply", "wlan0"]:
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr=""
-            )
-        raise AssertionError(f"Unexpected subprocess command: {cmd}")
-
-    monkeypatch.setattr(main_module.subprocess, "run", fake_run)
-
-    assert main_module._disable_wifi_power_save_for_saved_connections() is True
-    assert [
-        "sudo",
-        "nmcli",
-        "connection",
-        "modify",
-        "uuid",
-        "wifi-uuid",
-        "802-11-wireless.powersave",
-        "2",
-    ] in commands
-    assert ["sudo", "nmcli", "connection", "reload"] in commands
-    assert ["sudo", "nmcli", "device", "reapply", "wlan0"] in commands
-
-
-def test_install_updates_runs_wifi_power_save_migration_in_production(
+def test_install_updates_does_not_manage_networking(
     monkeypatch, tmp_path
 ):
     project_root = tmp_path / "project"
     project_root.mkdir()
-    migration_calls = []
+    def forbidden_command(*args, **kwargs):
+        pytest.fail("Updates must not invoke network management commands")
+
+    monkeypatch.setattr(main_module.subprocess, "run", forbidden_command)
 
     monkeypatch.setattr(main_module, "_get_project_root", lambda: project_root)
     monkeypatch.setattr(
@@ -780,38 +563,11 @@ def test_install_updates_runs_wifi_power_save_migration_in_production(
             args=["pip"], returncode=0, stdout="", stderr=""
         ),
     )
-    monkeypatch.setattr(
-        main_module,
-        "_repair_wifi_power_save_persistence",
-        lambda: migration_calls.append("called") or True,
-    )
     monkeypatch.setattr(main_module, "_restart_pc1_service", lambda: None)
 
     result = asyncio.run(main_module.install_updates())
 
     assert result["success"] is True
-    assert migration_calls == ["called"]
-
-
-def test_repair_wifi_power_save_persistence_runs_helper_and_profile_migration(
-    monkeypatch,
-):
-    calls = []
-
-    monkeypatch.setattr(
-        main_module.wifi_manager,
-        "ensure_wifi_powersave_disabled",
-        lambda: calls.append("helper") or True,
-    )
-    monkeypatch.setattr(
-        main_module,
-        "_disable_wifi_power_save_for_saved_connections",
-        lambda: calls.append("profiles") or False,
-    )
-    monkeypatch.setattr(main_module.platform, "system", lambda: "Linux")
-
-    assert main_module._repair_wifi_power_save_persistence() is True
-    assert calls == ["helper", "profiles"]
 
 
 def test_try_begin_print_job_respects_hold_reservation(monkeypatch):
@@ -1532,174 +1288,6 @@ def test_calendar_receipt_reports_unreadable_feed_when_parse_fails(
     assert "No upcoming events." not in output
 
 
-def test_factory_reset_reports_reboot_failure(monkeypatch):
-    deleted = []
-
-    monkeypatch.setattr(factory_reset_module.os.path, "exists", lambda _p: True)
-    monkeypatch.setattr(factory_reset_module.os, "remove", lambda p: deleted.append(p))
-    monkeypatch.setattr(
-        factory_reset_module.wifi_manager, "forget_all_wifi", lambda: True
-    )
-    monkeypatch.setattr(
-        factory_reset_module.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=["sudo", "reboot"], returncode=1, stdout="", stderr="sudo denied"
-        ),
-    )
-
-    result = factory_reset_module.perform_factory_reset()
-
-    assert result["config_cleared"] is True
-    assert result["wifi_cleared"] is True
-    assert result["reboot_requested"] is False
-    assert any("Reboot command failed" in e for e in result["errors"])
-    assert len(deleted) == 3
-
-
-def test_factory_reset_success_path(monkeypatch):
-    monkeypatch.setattr(factory_reset_module.os.path, "exists", lambda _p: False)
-    monkeypatch.setattr(
-        factory_reset_module.wifi_manager, "forget_all_wifi", lambda: True
-    )
-    monkeypatch.setattr(
-        factory_reset_module.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=["sudo", "reboot"], returncode=0, stdout="", stderr=""
-        ),
-    )
-
-    result = factory_reset_module.perform_factory_reset()
-
-    assert result["config_cleared"] is True
-    assert result["wifi_cleared"] is True
-    assert result["reboot_requested"] is True
-    assert result["errors"] == []
-
-
-def test_factory_reset_resets_managed_device_password(monkeypatch, tmp_path: Path):
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    (project_root / "config.json").write_text("{}", encoding="utf-8")
-    (project_root / "config.json.bak").write_text("{}", encoding="utf-8")
-    (project_root / ".welcome_printed").write_text("1\n", encoding="utf-8")
-
-    password_file = tmp_path / "etc" / "pc1" / "device_password"
-    managed_file = tmp_path / "etc" / "pc1" / "device_managed"
-    password_file.parent.mkdir(parents=True)
-    password_file.write_text("old-password\n", encoding="utf-8")
-    managed_file.write_text("1\n", encoding="utf-8")
-
-    calls = []
-
-    def fake_run(args, **kwargs):
-        calls.append((args, kwargs))
-        return subprocess.CompletedProcess(
-            args=args, returncode=0, stdout="", stderr=""
-        )
-
-    monkeypatch.setattr(
-        factory_reset_module,
-        "_project_base_dir",
-        lambda: str(project_root),
-    )
-    monkeypatch.setattr(factory_reset_module.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        factory_reset_module.wifi_manager, "forget_all_wifi", lambda: True
-    )
-    monkeypatch.setattr(
-        factory_reset_module.device_password,
-        "generate_device_password",
-        lambda length=8: "freshpass",
-    )
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("PC1_DEVICE_MANAGED_FILE", str(managed_file))
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("USER", "pc1")
-    monkeypatch.setattr(factory_reset_module.platform, "system", lambda: "Linux")
-
-    result = factory_reset_module.perform_factory_reset()
-
-    assert result["config_cleared"] is True
-    assert result["device_password_reset"] is True
-    assert result["wifi_cleared"] is True
-    assert result["reboot_requested"] is True
-    assert result["errors"] == []
-    assert password_file.read_text(encoding="utf-8").strip() == "freshpass"
-    assert calls[0][0][-1] == "ensure-password-store"
-    assert calls[1][0] == ["sudo", "chpasswd"]
-    assert calls[1][1]["input"] == "pc1:freshpass\n"
-    assert calls[2][0] == ["sudo", "reboot"]
-
-
-def test_factory_reset_recovers_missing_managed_password_store(monkeypatch, tmp_path: Path):
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    (project_root / "config.json").write_text("{}", encoding="utf-8")
-    (project_root / "config.json.bak").write_text("{}", encoding="utf-8")
-    (project_root / ".welcome_printed").write_text("1\n", encoding="utf-8")
-
-    password_file = tmp_path / "etc" / "pc1" / "device_password"
-    managed_file = tmp_path / "etc" / "pc1" / "device_managed"
-
-    calls = []
-
-    def fake_run(args, **kwargs):
-        calls.append((args, kwargs))
-        return subprocess.CompletedProcess(
-            args=args, returncode=0, stdout="", stderr=""
-        )
-
-    monkeypatch.setattr(
-        factory_reset_module,
-        "_project_base_dir",
-        lambda: str(project_root),
-    )
-    monkeypatch.setattr(factory_reset_module.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        factory_reset_module.wifi_manager, "forget_all_wifi", lambda: True
-    )
-    monkeypatch.setattr(
-        factory_reset_module.device_password,
-        "generate_device_password",
-        lambda length=8: "freshpass",
-    )
-    def ensure_store():
-        password_file.parent.mkdir(parents=True, exist_ok=True)
-        password_file.write_text("", encoding="utf-8")
-        managed_file.write_text("1\n", encoding="utf-8")
-        return True
-
-    monkeypatch.setattr(
-        factory_reset_module.wifi_manager,
-        "ensure_managed_device_password_store",
-        ensure_store,
-    )
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("PC1_DEVICE_MANAGED_FILE", str(managed_file))
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("USER", "pc1")
-    monkeypatch.setattr(factory_reset_module.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(
-        factory_reset_module.device_password,
-        "_looks_like_pc1_host",
-        lambda: True,
-    )
-
-    result = factory_reset_module.perform_factory_reset()
-
-    assert result["config_cleared"] is True
-    assert result["device_password_reset"] is True
-    assert result["wifi_cleared"] is True
-    assert result["reboot_requested"] is True
-    assert result["errors"] == []
-    assert password_file.read_text(encoding="utf-8").strip() == "freshpass"
-    assert calls[0][0] == ["sudo", "chpasswd"]
-    assert calls[0][1]["input"] == "pc1:freshpass\n"
-    assert calls[1][0] == ["sudo", "reboot"]
-
-
 def test_install_update_dependencies_recreates_missing_repo_venv(
     monkeypatch, tmp_path
 ):
@@ -2147,7 +1735,58 @@ def test_quick_actions_ignores_invalid_selection_without_printing(monkeypatch):
 
     assert order == []
     assert captured["module_id"] == "quick-actions-5"
-    assert captured["valid_positions"] == {1, 2, 3, 4, 5, 8}
+    assert captured["valid_positions"] == {1, 2, 5, 8}
+
+
+def test_application_reset_keeps_password_and_runs_no_host_commands(monkeypatch, tmp_path):
+    import app.config as config_module
+    import app.factory_reset as factory_reset
+
+    saved = []
+    fake_config_file = tmp_path / "app" / "config.py"
+    fake_config_file.parent.mkdir()
+    (tmp_path / "config.json.bak").write_text("{}", encoding="utf-8")
+    (tmp_path / ".welcome_printed").write_text("1", encoding="utf-8")
+    monkeypatch.setattr(config_module, "__file__", str(fake_config_file))
+    monkeypatch.setattr(config_module, "save_config", saved.append)
+    monkeypatch.setattr(config_module, "settings", config_module.Settings(city_name="Old"))
+    monkeypatch.setenv("PC1_DEVICE_PASSWORD", "unchanged-password")
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: pytest.fail("reset must not run host commands")
+    )
+    monkeypatch.setattr(main_module, "global_loop", None)
+    monkeypatch.setattr(main_module, "settings", config_module.settings)
+
+    result = main_module._reset_application_settings()
+
+    assert result == {"config_cleared": True, "errors": []}
+    assert len(saved) == 1 and saved[0] is config_module.settings
+    assert main_module.settings is config_module.settings
+    assert main_module.settings.city_name != "Old"
+    assert not (tmp_path / "config.json.bak").exists()
+    assert not (tmp_path / ".welcome_printed").exists()
+    import app.device_password as device_password
+    assert device_password.get_device_password() == "unchanged-password"
+
+
+def test_application_reset_failure_leaves_live_settings(monkeypatch):
+    import app.config as config_module
+
+    original = config_module.Settings(city_name="Keep")
+    monkeypatch.setattr(config_module, "settings", original)
+    monkeypatch.setattr(main_module, "settings", original)
+
+    def fail_save(_settings):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(config_module, "save_config", fail_save)
+
+    result = main_module._reset_application_settings()
+
+    assert result["config_cleared"] is False
+    assert "disk full" in result["errors"][0]
+    assert config_module.settings is original
+    assert main_module.settings is original
 
 
 def test_quick_factory_reset_confirmation_ignores_empty_slots(monkeypatch):

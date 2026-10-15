@@ -406,31 +406,6 @@ async function capture(
   state.manifest.push(`${fileName}\t${description}`);
 }
 
-async function captureApWorkflow(state, page, args, outputDir) {
-  await withStep(state, "ap_setup_screen", async () => {
-    await page.getByRole("heading", { name: /WiFi Setup/i }).waitFor({
-      state: "visible",
-      timeout: args.timeoutMs,
-    });
-    await capture(state, page, outputDir, "wifi_setup", "WiFi setup screen (AP mode)");
-  });
-
-  await withStep(state, "ap_manual_entry", async () => {
-    const manualEntry = page
-      .getByRole("button", { name: /Enter network name manually/i })
-      .first();
-    await manualEntry.waitFor({ state: "visible", timeout: args.timeoutMs });
-    await manualEntry.click();
-    await capture(
-      state,
-      page,
-      outputDir,
-      "wifi_setup_manual_entry",
-      "WiFi setup screen (manual SSID entry)"
-    );
-  });
-}
-
 async function captureClientWorkflow(state, page, args, outputDir, createdModules) {
   await withStep(state, "general_tab", async () => {
     await clickTab(page, "GENERAL", args.timeoutMs);
@@ -581,15 +556,7 @@ async function main() {
       notes.push("auth_strategy=none");
     }
 
-    console.log("[settings-ui] fetching wifi status");
-    const wifi = await apiRequest("GET", `${args.baseUrl}/api/wifi/status`, {
-      auth: apiAuth,
-      expected: [200],
-    });
-    const wifiMode = wifi.json?.mode || "unknown";
-    notes.push(`wifi_mode=${wifiMode}`);
-
-    if (!args.skipModuleSeeding && wifiMode !== "ap") {
+    if (!args.skipModuleSeeding) {
       console.log("[settings-ui] seeding module instances for editor captures");
       await removeExistingSeedModules(
         args.baseUrl,
@@ -605,10 +572,8 @@ async function main() {
       createdModules = seeded.createdModules;
       notes.push(`seeded_modules=${createdModules.length}`);
       console.log(`[settings-ui] seeded_modules=${createdModules.length}`);
-    } else if (args.skipModuleSeeding) {
-      notes.push("module_seeding=skipped_by_flag");
     } else {
-      notes.push("module_seeding=skipped_ap_mode");
+      notes.push("module_seeding=skipped_by_flag");
     }
 
     console.log("[settings-ui] launching browser");
@@ -659,23 +624,8 @@ async function main() {
     console.log("[settings-ui] page loaded");
     await page.waitForTimeout(600);
 
-    const isSettingsUi = await page
-      .locator("h1", { hasText: "PC-1 SETTINGS" })
-      .first()
-      .isVisible()
-      .catch(() => false);
-    const isApUi = await page
-      .getByRole("heading", { name: /WiFi Setup/i })
-      .first()
-      .isVisible()
-      .catch(() => false);
-
-    if (isApUi && !isSettingsUi) {
-      await captureApWorkflow(state, page, args, outputDir);
-    } else {
-      await ensureBrowserAuthenticated(page, args);
-      await captureClientWorkflow(state, page, args, outputDir, createdModules);
-    }
+    await ensureBrowserAuthenticated(page, args);
+    await captureClientWorkflow(state, page, args, outputDir, createdModules);
 
     await context.close();
   } catch (error) {

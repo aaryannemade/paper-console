@@ -3,8 +3,6 @@ import { SunIcon, MoonIcon, MonitorIcon } from '@phosphor-icons/react';
 import { formatTimeForDisplay } from '../utils';
 import { INK_GRADIENTS } from '../constants';
 import PrimaryButton from './PrimaryButton';
-import WiFiIcon from '../assets/WiFiIcon';
-import WiFiOffIcon from '../assets/WiFiOffIcon';
 import LocationSearch from './widgets/LocationSearch';
 import { adminAuthFetch } from '../lib/adminAuthFetch';
 
@@ -12,8 +10,6 @@ import { adminAuthFetch } from '../lib/adminAuthFetch';
 const GeneralSettings = ({
   settings,
   saveGlobalSettings,
-  triggerAPMode,
-  wifiStatus,
   onConfigImported,
 }) => {
   const inputClass = 'w-full p-3 text-base border-2 border-gray-300 rounded-lg focus:outline-none box-border';
@@ -479,12 +475,6 @@ const GeneralSettings = ({
 
   // Auto sync time
   const syncTimeAutomatically = async () => {
-    if (!wifiStatus?.connected) {
-      setTimeStatus({ type: 'error', message: 'Internet connection required for automatic time sync' });
-      setTimeout(() => setTimeStatus({ type: '', message: '' }), 5000);
-      return;
-    }
-
     setTimeStatus({ type: '', message: '' });
     try {
       const response = await adminAuthFetch('/api/system/time/sync', {
@@ -867,43 +857,6 @@ const GeneralSettings = ({
         </div>
       </div>
 
-      {/* WiFi Status Display */}
-      {wifiStatus && (
-        <div className='rounded-xl p-[4px] shadow-lg' style={{ background: inkGradients[0] }}>
-          <div className='bg-bg-card rounded-lg p-4 flex flex-col'>
-            <h3 className='font-bold text-black  text-lg tracking-tight mb-3'>Network</h3>
-            <div className='flex items-center justify-between'>
-              <div className='flex-1'>
-                <div className='flex items-center gap-2'>
-                  {wifiStatus.connected ? (
-                    <WiFiIcon className='w-4 h-4' style={{ color: 'var(--color-text-muted)' }} />
-                  ) : (
-                    <WiFiOffIcon className='w-4 h-4' style={{ color: 'var(--color-error)' }} />
-                  )}
-                  <span className='font-bold text-black '>
-                    {wifiStatus.connected && wifiStatus.ssid
-                      ? wifiStatus.ssid
-                      : wifiStatus.mode === 'ap'
-                      ? 'Setup Mode (AP)'
-                      : 'Not Connected'}
-                  </span>
-                  <button
-                    type='button'
-                    onClick={triggerAPMode}
-                    className='text-xs underline ml-2 cursor-pointer font-bold'
-                    style={{ color: 'var(--color-brass)' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-text-main)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--color-brass)')}>
-                    Reset WiFi
-                  </button>
-                </div>
-                {wifiStatus.connected && wifiStatus.ip && <div className='text-xs text-gray-600 mt-1 '>IP: {wifiStatus.ip}</div>}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Location Settings */}
       <div className='rounded-xl p-[4px] shadow-lg' style={{ background: inkGradients[2] }}>
         <div className='bg-bg-card rounded-lg p-4 flex flex-col'>
@@ -996,17 +949,11 @@ const GeneralSettings = ({
                     console.log('[TimeSync] Switching to automatic mode');
                     setUseAutoTime(true);
                     saveGlobalSettings({ time_sync_mode: 'automatic' });
-                    if (wifiStatus?.connected) {
-                      syncTimeAutomatically();
-                    }
+                    syncTimeAutomatically();
                   }}
                   className='sr-only'
                 />
                 <div className='flex items-baseline justify-center gap-1.5'>
-                  <WiFiIcon
-                    className={`w-3 h-3 flex-shrink-0 ${useAutoTime ? 'text-black' : 'text-gray-600'}`}
-                    style={{ transform: 'translateY(0.125rem)' }}
-                  />
                   <span className={`text-sm font-medium  ${useAutoTime ? 'text-black font-bold' : 'text-gray-600'}`}>Automatic</span>
                 </div>
               </label>
@@ -1015,9 +962,8 @@ const GeneralSettings = ({
             {/* Automatic Mode Actions */}
             {useAutoTime && (
               <div className='p-4 border-2 border-black rounded-b-lg -mt-[2px]'>
-                {wifiStatus?.connected ? (
                   <div>
-                    <p className='text-sm font-bold text-black mb-2 '>Time Set Automatically</p>
+                    <p className='text-sm font-bold text-black mb-2 '>Server Time</p>
                     {currentTime && (
                       <div className='p-3 bg-gray-50 border-2 border-gray-300 rounded-lg'>
                         <div className='text-xs text-gray-600 mb-1 uppercase font-bold'>Current Time</div>
@@ -1025,30 +971,10 @@ const GeneralSettings = ({
                           <div className='text-lg font-bold text-black'>
                             {currentTime.date} {formatTimeForDisplay(currentTime.time, settings.time_format || '12h')}
                           </div>
-                          <WiFiIcon className='w-3.5 h-3.5' style={{ color: 'var(--color-text-muted)' }} />
                         </div>
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div>
-                    <p className='text-sm font-bold text-black mb-2 '>Not Syncing</p>
-                    <p className='text-sm text-yellow-700 mb-3 '>
-                      Internet connection required for automatic time synchronization. Connect to WiFi or use manual mode.
-                    </p>
-                    {currentTime && (
-                      <div className='p-3 bg-gray-50 border-2 border-gray-300 rounded-lg'>
-                        <div className='text-xs text-gray-600 mb-1 uppercase font-bold'>Current Time</div>
-                        <div className='flex items-center gap-2'>
-                          <div className='text-lg font-bold text-black'>
-                            {currentTime.date} {formatTimeForDisplay(currentTime.time, settings.time_format || '12h')}
-                          </div>
-                          <WiFiOffIcon className='w-3.5 h-3.5' style={{ color: 'var(--color-error)' }} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             )}
 
@@ -1170,7 +1096,7 @@ const GeneralSettings = ({
         <div className='bg-bg-card rounded-lg p-4 flex flex-col'>
           <h3 className='font-bold text-black  text-lg tracking-tight mb-3'>Device Password</h3>
           <p className='text-sm text-gray-600 mb-4 '>
-            The Device Password is shared across settings login, setup WiFi, printed setup instructions, and SSH access.
+            The Device Password controls settings login and SSH access on managed legacy devices.
           </p>
 
           <div className='space-y-4'>

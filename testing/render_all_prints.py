@@ -5,19 +5,17 @@ This script overwrites a target folder on each run so snapshots stay current.
 It captures:
 1) Every configured channel (1-8)
 2) Every configured module instance
-3) Key system receipts (setup instructions, first boot welcome, system ready)
+3) Every registered module type (including unassigned types)
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 from copy import deepcopy
 import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
 from typing import Optional
 from datetime import date, datetime, timedelta
 
@@ -176,6 +174,8 @@ class CapturePrinter(SerialPrinterDriver):
     def _send_bitmap(self, img):  # type: ignore[override]
         if img is not None:
             self.captured_bitmaps.append(img.copy())
+        # flush_buffer() reads transport stats from the real driver's return value.
+        return {"cancelled": False}
 
     def blip(self):
         # Skip tactile feedback in offline render mode.
@@ -544,68 +544,6 @@ def _render_calendar_view_mode_snapshot(
     )
 
 
-def _render_setup_instructions(out_dir: Path, out_path: Optional[Path] = None) -> Path:
-    selection_mode.exit_selection_mode()
-    import app.utils as utils
-
-    original_printer = utils.printer
-    printer = CapturePrinter(width=PRINTER_WIDTH)
-    try:
-        utils.printer = printer
-        utils.print_setup_instructions_sync()
-    finally:
-        utils.printer = original_printer
-    final_out = out_path or (out_dir / "system_setup_instructions.png")
-    return _save_single_bitmap(printer, final_out)
-
-
-def _render_first_boot(out_dir: Path, out_path: Optional[Path] = None) -> Path:
-    selection_mode.exit_selection_mode()
-    import app.main as main
-
-    original_printer = main.printer
-    original_marker_getter = main._get_welcome_marker_path
-    printer = CapturePrinter(width=PRINTER_WIDTH)
-    marker = out_dir / f"__first_boot_missing_{uuid4().hex}.marker"
-    try:
-        main.printer = printer
-        main._get_welcome_marker_path = lambda: str(marker)
-        asyncio.run(main.check_first_boot())
-    finally:
-        main.printer = original_printer
-        main._get_welcome_marker_path = original_marker_getter
-        try:
-            marker.unlink(missing_ok=True)
-        except Exception:
-            pass
-    final_out = out_path or (out_dir / "system_first_boot_welcome.png")
-    return _save_single_bitmap(printer, final_out)
-
-
-def _render_system_ready(out_dir: Path, out_path: Optional[Path] = None) -> Path:
-    selection_mode.exit_selection_mode()
-    import app.main as main
-
-    original_printer = main.printer
-    original_marker_getter = main._get_welcome_marker_path
-    printer = CapturePrinter(width=PRINTER_WIDTH)
-    marker = out_dir / "__system_ready_exists.marker"
-    marker.write_text("1", encoding="utf-8")
-    try:
-        main.printer = printer
-        main._get_welcome_marker_path = lambda: str(marker)
-        asyncio.run(main.check_first_boot())
-    finally:
-        main.printer = original_printer
-        main._get_welcome_marker_path = original_marker_getter
-        try:
-            marker.unlink(missing_ok=True)
-        except Exception:
-            pass
-    final_out = out_path or (out_dir / "system_ready.png")
-    return _save_single_bitmap(printer, final_out)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Unified debug renderer for full or targeted print snapshots."
@@ -619,11 +557,6 @@ def parse_args() -> argparse.Namespace:
     target.add_argument("--channel", type=int, help="Render one channel position (1-8).")
     target.add_argument("--module-id", help="Render one configured module instance by id.")
     target.add_argument("--module-type", help="Render one module type snapshot by type id.")
-    target.add_argument(
-        "--system",
-        choices=["setup", "first_boot", "ready"],
-        help="Render one system receipt variant.",
-    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -661,13 +594,6 @@ def _default_target_output(args: argparse.Namespace) -> Path:
         return debug_dir / f"module_{safe}.png"
     if args.module_type:
         return debug_dir / f"module_type_{args.module_type}.png"
-    if args.system:
-        mapping = {
-            "setup": "system_setup_instructions.png",
-            "first_boot": "system_first_boot_welcome.png",
-            "ready": "system_ready.png",
-        }
-        return debug_dir / mapping[args.system]
     return debug_dir / "single_render.png"
 
 
@@ -716,16 +642,6 @@ def _run_targeted_render(args: argparse.Namespace, include_interactive: bool) ->
         print(f"[render-one] target=module-type:{args.module_type} saved={saved}")
         return 0
 
-    if args.system:
-        if args.system == "setup":
-            saved = _render_setup_instructions(out_dir, out_path=out_path)
-        elif args.system == "first_boot":
-            saved = _render_first_boot(out_dir, out_path=out_path)
-        else:
-            saved = _render_system_ready(out_dir, out_path=out_path)
-        print(f"[render-one] target=system:{args.system} saved={saved}")
-        return 0
-
     return 1
 
 
@@ -739,7 +655,6 @@ def main() -> int:
             args.channel is not None,
             bool(args.module_id),
             bool(args.module_type),
-            bool(args.system),
         ]
     )
 
@@ -824,13 +739,6 @@ def main() -> int:
                 msg = f"module-type:calendar:{view_mode} failed: {exc}"
                 failures.append(msg)
                 print(f"[warn] {msg}", file=sys.stderr)
-
-    # System prints
-    for renderer in (_render_setup_instructions, _render_first_boot, _render_system_ready):
-        try:
-            generated.append(renderer(out_dir))
-        except Exception as exc:
-            print(f"[warn] system render failed ({renderer.__name__}): {exc}", file=sys.stderr)
 
     # Write a simple manifest for quick diffs/review.
     manifest = out_dir / "manifest.txt"

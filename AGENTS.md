@@ -68,13 +68,12 @@ Targeted single renders:
 ./.venv/bin/python testing/render_all_prints.py --channel 3
 ./.venv/bin/python testing/render_all_prints.py --module-id default-weather-001
 ./.venv/bin/python testing/render_all_prints.py --module-type astronomy
-./.venv/bin/python testing/render_all_prints.py --system setup
 ```
 
 Rules:
 - This command is intended to refresh a gallery folder on every run.
 - It overwrites snapshot content by clearing prior `*.png` files in the target folder and regenerating all outputs.
-- It generates channel prints, module prints, and key system receipts (setup instructions, first-boot welcome, system ready).
+- It generates channel prints and module prints. (Setup/first-boot/system-ready receipts were removed with WiFi provisioning.)
 - It also renders all registered module types (including unassigned ones). For richer online-module snapshots, define optional test env vars in `.env`:
   - `PC1_TEST_NEWS_API_KEY`
   - `PC1_TEST_EMAIL_USER`

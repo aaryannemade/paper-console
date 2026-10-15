@@ -1,34 +1,57 @@
 # Container + ESP32-S3 migration plan
 
-Status: proposed; implementation should proceed in small, independently verified steps.
+Status: architecture confirmed; Step 1 (1a + 1b) implemented. Steps 2–5 remain
+pending. ESP32 transport and firmware are not implemented yet.
 
 ## Target
 
 - One container serves the HTTP API and built settings UI on a configurable port.
 - The container owns configuration, module execution, scheduling, and receipt rendering.
-- An ESP32-S3 sends HTTP requests in response to physical controls.
+- An ESP32-S3 sends physical input events to the container over HTTP. The container
+  interprets button/rotary events and pushes print commands to the ESP32 over HTTP.
+- The CSN-A2 printer is connected to the ESP32-S3 UART (TTL serial).
+- The ESP32 hosts its own captive portal and web UI for WiFi setup, container
+  connection configuration, and link status. These are firmware responsibilities.
 - Network provisioning belongs to the container host and ESP32 firmware, not the backend.
 - Local development uses the same application with mock/capture output.
 - No Raspberry Pi detection, GPIO access, host WiFi changes, sudo, or host reboot/update operations.
 
-## Decision needed before physical print transport work
+## Confirmed HTTP relay architecture
 
-Where is the printer connected? An HTTP trigger alone does not carry the generated
-receipt back to the printer. Confirm whether the ESP32-S3 owns the printer UART,
-or the container has access to a printer port.
+```text
+Button / rotary encoder -> ESP32-S3 --HTTP input event--> container
+CSN-A2 printer <- TTL UART <- ESP32-S3 <--HTTP print job-- container
+```
 
-If the ESP32 owns the UART, the proposed flow is:
+The container owns channel selection, button-action interpretation, interactive
+modules, scheduling, content generation and CSN-A2 print-command generation.
+Firmware owns input sampling/debouncing, provisioning, link reporting, bounded
+transport buffering and UART pacing/flow control. It does not render receipts or
+implement channel/module logic.
 
-1. ESP32 submits a channel print request; server returns a job ID.
-2. Server renders a receipt into a bounded, downloadable print payload.
-3. ESP32 retrieves it and streams it to the printer with local flow control.
-4. ESP32 acknowledges completion or failure; server updates job status.
+1. ESP32 joins WiFi using credentials configured in its captive portal/web UI.
+2. ESP32 registers its device identity and HTTP callback address with the configured
+   container URL and maintains a heartbeat. The UI shows connection state derived
+   from actual communication, not just whether WiFi is associated.
+3. ESP32 posts an input event with an event ID and sequence information. The
+   container acknowledges promptly and interprets it using server-side state.
+4. For a print action, the container renders and pushes a print job to the ESP32's
+   HTTP endpoint. This is a separate outbound request, not a receipt download
+   triggered by polling or a long-lived input-event response.
+5. ESP32 relays the payload to the CSN-A2 UART and reports job status to the server.
+   Acknowledging HTTP acceptance is distinct from completing UART delivery, and
+   UART delivery alone is not proof that paper physically printed.
 
-Scheduled/email/Slack prints need the same delivery path even without a button
-request, so the ESP32 must also discover pending jobs (polling is a simple first
-implementation). Define payload format, chunking, printer width, retry/deduplication,
-timeouts, and offline behavior before implementing this protocol. A server-side
-HTTP success must not be presented as confirmation of physical printing.
+Scheduled/email/Slack prints use the same server-initiated push without an input
+event. Both endpoints must be reachable on the LAN; Docker port mapping provides
+ESP32-to-server access, and the container needs outbound access to the ESP32.
+
+Protocol implementation will specify paired credentials, job IDs, duplicate input
+and print rejection, bounded payload/chunk sizes, printer width and serial settings,
+busy/cancel/error responses, heartbeat expiry, offline queue policy and restart
+reconciliation. Do not blindly replay a job whose UART delivery is uncertain.
+Keep the ESP32 HTTP server responsive during UART transfer so input/heartbeat/status
+traffic does not deadlock while the container is pushing a receipt.
 
 ## Current coupling
 
@@ -42,6 +65,17 @@ HTTP success must not be presented as confirmation of physical printing.
 | Deployment | `scripts/setup_pi.sh`, `scripts/wifi_ap_nmcli.sh`, `scripts/prepare_golden_image.sh`, `scripts/deploy_automated.py`, `run.sh`, `requirements-pi.txt`, `raspberry_pi/` | Replace Pi installation and service management with container packaging. Review device OTA release scripts/workflows and documentation. |
 
 ## Step 1 — Remove WiFi provisioning end to end
+
+Implement in two reviewable increments:
+
+- **1a — Server startup boundary (implemented):** remove automatic WiFi maintenance/AP recovery
+  and boot-time receipts; remove the WiFi-based authentication bypass. Server
+  restarts must not print or provision the network. Document explicit development
+  login credentials and test startup/shutdown against forbidden provisioning calls.
+- **1b — Remove remaining management surfaces (implemented):** remove the WiFi API, captive
+  routes, frontend onboarding/status dependencies, quick actions and reset hooks;
+  extract the generic WiFi QR generator before removing the manager. User-authored
+  WiFi QR codes are content, not host provisioning, and should remain supported.
 
 - Remove startup powersave repair and WiFi startup/recovery tasks.
 - Remove WiFi router registration, captive portal detection/redirects, and setup
@@ -82,6 +116,10 @@ have focused regression coverage.
   the full-receipt snapshot workflow.
 - Implement the agreed transport/job protocol, including how status, cancellation,
   concurrency and authentication work for the ESP32.
+- Add ESP32-S3 firmware with captive portal, persistent WiFi/container configuration,
+  local link-status UI, physical input events, HTTP print receiver and CSN-A2 UART
+  relay. Keep application decisions in the container and test scheduled pushes as
+  well as input-triggered pushes. Confirm board pin assignments when wiring firmware.
 
 Acceptance: HTTP triggers work without local hardware; concurrent requests and
 retries have defined behavior; full receipt snapshots preserve layout; physical
@@ -114,5 +152,25 @@ shutdown; smoke test a mock print via HTTP from outside the container.
 - Verify no remaining runtime paths rely on Pi files, GPIO, `nmcli`, `sudo`,
   `systemctl`, `raspi-config`, `chpasswd` or host filesystem mutation.
 
-Recommended next implementation: Step 1. It addresses the observed development
-startup behavior and does not depend on the printer transport decision.
+Step 1a verification: 313 backend tests pass, including startup/shutdown checks for
+both first and subsequent boots, authentication independent of AP state, and task
+cleanup. A real Uvicorn smoke test ran through the former delayed WiFi startup
+window and shut down cleanly without boot prints, sudo prompts or AP retries.
+
+Step 1b result: `app/wifi_manager.py`, the WiFi router, captive-portal probe routes,
+setup/welcome/system-ready receipts, WiFi quick actions and the WiFi UI screens are
+removed. The SPA catch-all route is replaced by `/` so retired probe paths return
+404. Resets restore application settings only (no WiFi forget, password change or
+reboot). WiFi QR generation moved to `app/qr_payloads.py` for the QR module.
+System Monitor reports the outbound-interface IP instead of WiFi SSID. Verification:
+303 backend tests (obsolete WiFi/AP tests removed; route-absence, reset, QR and IP
+tests added), frontend lint/build, full print gallery (41 renders, 0 failures), and
+a live server smoke test (WiFi/probe routes 404, auth enforced, channel print works,
+no sudo/AP activity).
+
+Known leftovers for Step 2: `scripts/wifi_ap_nmcli.sh` is still used by
+`app/printer_uart.py` (Pi UART migration) and the legacy managed-password helpers;
+`device_password.py` still describes AP/SSH usage. These go with Pi host
+administration.
+
+Next implementation: Step 2 (host administration removal).

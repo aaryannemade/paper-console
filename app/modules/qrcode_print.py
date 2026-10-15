@@ -14,7 +14,7 @@ Supports multiple QR code types:
 from app.config import QRCodeConfig, format_print_datetime
 from app.drivers.printer_mock import PrinterDriver
 from app.module_registry import register_module
-from app.wifi_manager import generate_wifi_qr_payload
+from app.qr_payloads import generate_wifi_qr_payload
 
 
 def _generate_vcard(first_name: str, last_name: str = "", phone: str = "", email: str = "") -> str:

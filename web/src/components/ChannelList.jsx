@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { INK_GRADIENTS } from '../constants';
 import { useModuleTypes } from '../hooks/useModuleTypes';
-import WiFiIcon from '../assets/WiFiIcon';
-import WiFiOffIcon from '../assets/WiFiOffIcon';
+import { Globe } from '@phosphor-icons/react';
 import PrintIcon from '../assets/PrintIcon';
 import ScheduleIcon from '../assets/ScheduleIcon';
 import ArrowUpIcon from '../assets/ArrowUpIcon';
@@ -26,7 +25,6 @@ const ChannelList = ({
   removeModuleFromChannel,
   setShowAddModuleModal,
   setShowCreateUnassignedModal,
-  wifiStatus,
 }) => {
   const { moduleTypes } = useModuleTypes();
   const listRefs = useRef({});
@@ -506,18 +504,7 @@ const ChannelList = ({
                         const validationIssueCount = getModuleValidationIssueCount(item.module);
                         const hasMalformedConfig = validationIssueCount > 0;
                         const displayName = item.module.name?.trim() || '(unnamed module)';
-                        const hasWifi = wifiStatus?.connected;
-                        
-                        // Determine icon color:
-                        // - Red: No WiFi
-                        // - Brass: WiFi connected but needs setup
-                        // - Grey: WiFi connected and configured
-                        let iconColor = 'var(--color-text-muted)'; // Default grey
-                        if (!hasWifi) {
-                          iconColor = 'var(--color-error)'; // Red for no WiFi
-                        } else if (needsSetup) {
-                          iconColor = 'var(--color-brass)'; // Brass for needs setup
-                        }
+                        const iconColor = needsSetup ? 'var(--color-brass)' : 'var(--color-text-muted)';
 
                         return (
                           <>
@@ -539,11 +526,7 @@ const ChannelList = ({
                         }`}
                         style={needsSetup ? { color: 'var(--color-brass)' } : {}}>
                         {isOnline && (
-                          hasWifi ? (
-                            <WiFiIcon className="w-2.5 h-2.5 flex-shrink-0 group-hover:text-black transition-colors" style={{ transform: 'translateY(0.125rem)', color: iconColor }} />
-                          ) : (
-                            <WiFiOffIcon className="w-2.5 h-2.5 flex-shrink-0" style={{ transform: 'translateY(0.125rem)', color: 'var(--color-error)' }} />
-                          )
+                          <Globe aria-label="Requires internet" className="w-2.5 h-2.5 flex-shrink-0" style={{ color: iconColor }} />
                         )}
                         <span className="truncate font-mono group-hover:text-black transition-colors" style={{ color: 'var(--color-text-muted)' }}>{typeMeta?.label?.toUpperCase()}</span>
                       </div>
@@ -648,14 +631,7 @@ const ChannelList = ({
               const validationIssueCount = getModuleValidationIssueCount(module);
               const hasMalformedConfig = validationIssueCount > 0;
               const displayName = module.name?.trim() || '(unnamed module)';
-              const hasWifi = wifiStatus?.connected;
-              
-              let iconColor = 'var(--color-text-muted)';
-              if (!hasWifi) {
-                iconColor = 'var(--color-error)';
-              } else if (needsSetup) {
-                iconColor = 'var(--color-brass)';
-              }
+              const iconColor = needsSetup ? 'var(--color-brass)' : 'var(--color-text-muted)';
 
               return (
                 <div
@@ -697,11 +673,7 @@ const ChannelList = ({
                       }`}
                       style={needsSetup ? { color: 'var(--color-brass)' } : {}}>
                       {isOnline && (
-                        hasWifi ? (
-                          <WiFiIcon className="w-2.5 h-2.5 flex-shrink-0 group-hover:text-black transition-colors" style={{ transform: 'translateY(0.125rem)', color: iconColor }} />
-                        ) : (
-                          <WiFiOffIcon className="w-2.5 h-2.5 flex-shrink-0" style={{ transform: 'translateY(0.125rem)', color: 'var(--color-error)' }} />
-                        )
+                        <Globe aria-label="Requires internet" className="w-2.5 h-2.5 flex-shrink-0" style={{ color: iconColor }} />
                       )}
                       <span className="truncate font-mono group-hover:text-black transition-colors" style={{ color: 'var(--color-text-muted)' }}>{typeMeta?.label?.toUpperCase()}</span>
                     </div>

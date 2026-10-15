@@ -1,11 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import WiFiSetup from './WiFiSetup';
 import GeneralSettings from './components/GeneralSettings';
 import ChannelList from './components/ChannelList';
 import AddModuleModal from './components/AddModuleModal';
 import EditModuleModal from './components/EditModuleModal';
 import ScheduleModal from './components/ScheduleModal';
-import APInstructionsModal from './components/APInstructionsModal';
 import StatusMessage from './components/StatusMessage';
 import ResetSettingsButton from './components/ResetSettingsButton';
 import SettingsLogin from './components/SettingsLogin';
@@ -22,8 +20,6 @@ import {
 
 
 function App() {
-  const [wifiMode, setWifiMode] = useState(null); // null = checking, 'client' = normal, 'ap' = setup mode
-  const [wifiStatus, setWifiStatus] = useState(null); // WiFi connection status
   const { moduleTypes } = useModuleTypes();
   const [settings, setSettings] = useState({
     timezone: '',
@@ -50,7 +46,6 @@ function App() {
   const [showEditModuleModal, setShowEditModuleModal] = useState(null); // module ID or null
   const [editingModule, setEditingModule] = useState(null); // Local copy of module being edited
   const [showScheduleModal, setShowScheduleModal] = useState(null); // channel position or null
-  const [showAPInstructions, setShowAPInstructions] = useState(false);
   const [authInfo, setAuthInfo] = useState(null);
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -74,52 +69,26 @@ function App() {
     setModules(modulesData.modules || {});
   };
 
-  // Check WiFi status on mount
+  // Authenticate directly; network provisioning belongs to the ESP32.
   useEffect(() => {
-    let isFirstLoad = true;
-
-    const fetchWifiStatus = async () => {
+    const loadSettings = async () => {
       try {
-        const response = await fetch('/api/wifi/status');
-        const data = await response.json();
-        setWifiStatus(data);
-        setWifiMode(data.mode);
-
-        // If in AP mode, don't fetch settings yet
-        if (data.mode === 'ap') {
-          if (isFirstLoad) setLoading(false);
-          return;
-        }
-
-        // On first load, fetch settings
-        if (isFirstLoad) {
-          try {
-            const auth = await fetchAdminAuthStatus();
-            setAuthInfo(auth);
-
-            if (auth?.login_required && !auth?.authenticated) {
-              setLoading(false);
-              isFirstLoad = false;
-              return;
-            }
-
-            await loadProtectedData();
-            setAuthError('');
-            setLoading(false);
-          } catch (err) {
-            console.error('Error fetching data:', err);
-            setStatus({ type: 'error', message: 'Failed to load settings. Is the backend running?' });
-            setLoading(false);
-          }
-          isFirstLoad = false;
+        const auth = await fetchAdminAuthStatus();
+        setAuthInfo(auth);
+        if (!auth?.login_required || auth?.authenticated) {
+          await loadProtectedData();
+          setAuthError('');
         }
       } catch (err) {
-        console.error('Error fetching WiFi status:', err);
-        if (isFirstLoad) setLoading(false);
+        console.error('Error fetching settings:', err);
+        setAuthInfo({ login_required: true, authenticated: false });
+        setAuthError('Failed to load settings. Is the backend running?');
+      } finally {
+        setLoading(false);
       }
     };
 
-    fetchWifiStatus();
+    loadSettings();
 
     const handleAuthRequired = (event) => {
       setAuthInfo((prev) => ({ ...(prev || {}), authenticated: false, login_required: true }));
@@ -127,10 +96,7 @@ function App() {
     };
     window.addEventListener('pc1-auth-required', handleAuthRequired);
 
-    // Update WiFi status every 10 seconds
-    const interval = setInterval(fetchWifiStatus, 10000);
     return () => {
-      clearInterval(interval);
       window.removeEventListener('pc1-auth-required', handleAuthRequired);
       // Cleanup location search timer
       if (locationSearchTimer.current) {
@@ -720,17 +686,6 @@ function App() {
     saveGlobalSettings({ channels: newChannels });
   };
 
-  const triggerAPMode = async () => {
-    try {
-      const response = await adminAuthFetch('/api/wifi/ap-mode', { method: 'POST' });
-      if (!response.ok) throw new Error('Failed to activate AP mode');
-      setStatus({ type: 'success', message: 'AP mode activating...' });
-      setShowAPInstructions(true);
-    } catch {
-      setStatus({ type: 'error', message: 'Failed to activate AP mode' });
-    }
-  };
-
   const handleTabKeyDown = (event, currentTab) => {
     const orderedTabs = ['general', 'channels'];
     const currentIndex = orderedTabs.indexOf(currentTab);
@@ -753,10 +708,6 @@ function App() {
 
   if (loading) {
     return <div className='max-w-[800px] w-full p-8 text-center'>Loading settings...</div>;
-  }
-
-  if (wifiMode === 'ap') {
-    return <WiFiSetup wifiStatus={wifiStatus} />;
   }
 
   if (authInfo?.login_required && !authInfo?.authenticated) {
@@ -853,8 +804,6 @@ function App() {
               selectLocation={selectLocation}
               settings={settings}
               saveGlobalSettings={saveGlobalSettings}
-              triggerAPMode={triggerAPMode}
-              wifiStatus={wifiStatus}
               onConfigImported={applyImportedConfig}
             />
             <div className='mt-8 flex items-center justify-between'>
@@ -897,7 +846,6 @@ function App() {
               removeModuleFromChannel={removeModuleFromChannel}
               setShowAddModuleModal={setShowAddModuleModal}
               setShowCreateUnassignedModal={setShowCreateUnassignedModal}
-              wifiStatus={wifiStatus}
             />
           )}
         </div>
@@ -959,8 +907,6 @@ function App() {
           timeFormat={settings.time_format}
           timezone={settings.timezone}
         />
-
-        <APInstructionsModal show={showAPInstructions} wifiStatus={wifiStatus} />
 
         <StatusMessage status={status} />
       </div>

@@ -1,11 +1,24 @@
 """Shared utility functions for modules."""
 
-from app.hardware import printer
-import app.wifi_manager as wifi_manager
+import socket
+from typing import Optional
 
-SETUP_WIFI_QR_SIZE = 6
-SETUP_WIFI_QR_ERROR_CORRECTION = "H"
 
+def get_primary_ip() -> Optional[str]:
+    """Return the address of the interface used for outbound traffic.
+
+    Connecting a UDP socket only selects a route; no packets are sent. Unlike
+    resolving the hostname, this avoids loopback answers such as 127.0.1.1.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("192.0.2.1", 9))  # TEST-NET-1, never routed publicly
+        address = sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+    return None if address.startswith("127.") or address == "0.0.0.0" else address
 
 def wrap_text(text: str, width: int = 42, indent: int = 0, preserve_line_breaks: bool = False) -> list[str]:
     """Wraps text to fit the printer width with optional indentation.
@@ -71,58 +84,6 @@ def wrap_text(text: str, width: int = 42, indent: int = 0, preserve_line_breaks:
             lines.append(current_line.strip())
 
         return lines
-
-
-def print_setup_instructions_sync():
-    """
-    Prints WiFi setup instructions to the thermal printer.
-    This function is safe to call from background tasks.
-    """
-    try:
-        # Start from a known-good printer state to avoid carrying over
-        # partial commands or mode flags from previous/reboot transitions.
-        if hasattr(printer, "clear_hardware_buffer"):
-            printer.clear_hardware_buffer()
-        if hasattr(printer, "reset_buffer"):
-            printer.reset_buffer()
-
-        printer.print_header("SETUP INSTRUCTIONS", icon="wifi")
-        printer.print_line()
-        printer.print_body("Connect to WiFi:")
-        print_setup_wifi_access_details(printer)
-        printer.print_line()
-        printer.print_body("Then visit:")
-        printer.print_bold("  http://pc-1.local")
-        printer.print_caption("  or http://10.42.0.1")
-        printer.feed(1)
-
-        # Flush buffer to print
-        if hasattr(printer, "flush_buffer"):
-            printer.flush_buffer()
-
-    except Exception:
-        pass
-
-
-def print_setup_wifi_access_details(
-    printer_obj,
-    ssid: str | None = None,
-    password: str | None = None,
-):
-    """Print setup WiFi credentials plus a scannable QR code."""
-    ssid = ssid or wifi_manager.get_ap_ssid()
-    password = password or wifi_manager.get_ap_password()
-
-    printer_obj.print_bold(f"  {ssid}")
-    printer_obj.print_caption(f"  Password: {password}")
-
-    if hasattr(printer_obj, "print_qr"):
-        printer_obj.print_caption("  Scan to join automatically")
-        printer_obj.print_qr(
-            data=wifi_manager.generate_wifi_qr_payload(ssid, password),
-            size=SETUP_WIFI_QR_SIZE,
-            error_correction=SETUP_WIFI_QR_ERROR_CORRECTION,
-        )
 
 
 def wrap_text_pixels(
