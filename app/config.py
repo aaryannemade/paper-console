@@ -294,8 +294,6 @@ class Settings(BaseModel):
     city_name: str = "New York"
     state: Optional[str] = None
     time_format: str = "12h"  # "12h" for 12-hour format, "24h" for 24-hour format
-    time_sync_mode: str = "manual"  # "manual" or "automatic" for time synchronization mode
-    release_channel: Literal["stable", "beta"] = "stable"
     max_print_lines: int = 200  # Maximum lines per print job (0 = no limit)
     theme: str = "light"  # Web UI theme: "light", "dark", or "system"
 
@@ -328,13 +326,6 @@ class Settings(BaseModel):
     def validate_time_format(cls, v):
         if v not in ("12h", "24h"):
             return "12h"
-        return v
-
-    @field_validator("time_sync_mode")
-    @classmethod
-    def validate_time_sync_mode(cls, v):
-        if v not in ("manual", "automatic"):
-            return "manual"
         return v
 
     @field_validator("theme")
@@ -382,10 +373,6 @@ def _try_load_config_file(config_path: str) -> Settings | None:
                     except (ValueError, TypeError):
                         normalized_channels[key] = value
                 data["channels"] = normalized_channels
-
-            # Default if missing (older JSON)
-            if "time_sync_mode" not in data:
-                data["time_sync_mode"] = "manual"
 
             return Settings(**data)
     except Exception:
@@ -462,11 +449,7 @@ def save_config(new_settings: Settings):
     try:
         # Write to temp file first
         with open(temp_path, "w") as f:
-            # Get the model dump and ensure time_sync_mode is always included
             settings_dict = new_settings.model_dump(exclude_unset=False)
-            # Explicitly ensure time_sync_mode is present (for backward compatibility)
-            if "time_sync_mode" not in settings_dict:
-                settings_dict["time_sync_mode"] = "manual"
             global _warned_non_posix_sensitive_data
             if (
                 _contains_sensitive_config_values(settings_dict)

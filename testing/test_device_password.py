@@ -1,115 +1,79 @@
-"""Tests for unified Device Password storage and fallback behavior."""
+"""Server password resolution: env, then file, then a persisted generated value."""
 
-from pathlib import Path
+import os
+import stat
+
+import pytest
 
 import app.device_password as device_password
 
 
-def test_device_password_reads_managed_file(monkeypatch, tmp_path: Path):
-    password_file = tmp_path / "device_password"
-    password_file.write_text("managed-pass-123\n", encoding="utf-8")
-
+@pytest.fixture(autouse=True)
+def isolated_password_env(monkeypatch, tmp_path):
     monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
+    monkeypatch.delenv("PC1_DEVICE_PASSWORD_FILE", raising=False)
+    monkeypatch.setenv("PC1_GENERATED_PASSWORD_FILE", str(tmp_path / "generated" / "pw"))
+    monkeypatch.setattr(device_password, "_announced_generated_password", False)
 
-    assert device_password.get_device_password() == "managed-pass-123"
+
+def test_env_password_takes_priority(monkeypatch, tmp_path):
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("from-file-password\n", encoding="utf-8")
+    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(secret_file))
+    monkeypatch.setenv("PC1_DEVICE_PASSWORD", "  from-env-password  ")
+
+    assert device_password.get_device_password() == "from-env-password"
+    assert device_password.get_device_password_source() == "env"
+
+
+def test_password_file_supports_docker_secrets(monkeypatch, tmp_path):
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("from-file-password\n", encoding="utf-8")
+    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(secret_file))
+
+    assert device_password.get_device_password() == "from-file-password"
     assert device_password.get_device_password_source() == "file"
 
 
-def test_device_password_reports_managed_file_source(monkeypatch, tmp_path: Path):
-    password_file = tmp_path / "device_password"
-    managed_file = tmp_path / "device_managed"
-    password_file.write_text("managed-pass-123\n", encoding="utf-8")
-    managed_file.write_text("1\n", encoding="utf-8")
+@pytest.mark.parametrize("env_value", ["short", "1234567"])
+def test_too_short_env_password_is_rejected(monkeypatch, env_value):
+    monkeypatch.setenv("PC1_DEVICE_PASSWORD", env_value)
 
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("PC1_DEVICE_MANAGED_FILE", str(managed_file))
-
-    assert device_password.is_device_managed() is True
-    assert device_password.get_device_password_source() == "managed_file"
-    assert device_password.can_change_device_password() is True
+    with pytest.raises(ValueError, match="at least 8"):
+        device_password.get_device_password()
 
 
-def test_raspberry_pi_host_uses_managed_fallback_without_marker(monkeypatch, tmp_path: Path):
-    password_file = tmp_path / "missing" / "device_password"
-    managed_file = tmp_path / "missing" / "device_managed"
+def test_missing_password_file_is_rejected_instead_of_falling_back(monkeypatch, tmp_path):
+    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(tmp_path / "does-not-exist"))
 
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("PC1_DEVICE_MANAGED_FILE", str(managed_file))
-    monkeypatch.setattr(device_password, "_looks_like_pc1_host", lambda: True)
-
-    assert device_password.is_device_managed() is True
-    assert device_password.get_device_password_source() == "managed_fallback"
-    assert device_password.can_change_device_password() is False
+    with pytest.raises(ValueError, match="PC1_DEVICE_PASSWORD_FILE"):
+        device_password.get_device_password()
+    assert not device_password.get_generated_password_path().exists()
 
 
-def test_managed_fallback_with_placeholder_file_can_change(monkeypatch, tmp_path: Path):
-    password_file = tmp_path / "device_password"
-    managed_file = tmp_path / "device_managed"
-    password_file.write_text("", encoding="utf-8")
-    managed_file.write_text("1\n", encoding="utf-8")
+def test_generated_password_is_strong_persistent_and_private(tmp_path, caplog):
+    first = device_password.get_device_password()
+    second = device_password.get_device_password()
+    path = device_password.get_generated_password_path()
 
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("PC1_DEVICE_MANAGED_FILE", str(managed_file))
-
-    assert device_password.get_device_password_source() == "managed_fallback"
-    assert device_password.can_change_device_password() is True
-
-
-def test_generate_device_password_uses_word_pair_format():
-    generated = device_password.generate_device_password()
-
-    left, right = generated.split("-", 1)
-    assert len(left) == 4
-    assert len(right) == 4
-    assert left in device_password.DEFAULT_DEVICE_PASSWORD_WORDS
-    assert right in device_password.DEFAULT_DEVICE_PASSWORD_WORDS
+    assert first == second
+    assert len(first) >= 20
+    assert path.read_text(encoding="utf-8").strip() == first
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert device_password.get_device_password_source() == "generated"
+    # Logged once so the operator can log in.
+    assert sum(first in record.getMessage() for record in caplog.records) == 1
 
 
-def test_device_password_fallback_uses_word_pair_format(monkeypatch, tmp_path: Path):
-    password_file = tmp_path / "missing" / "device_password"
+def test_generated_password_survives_restart(monkeypatch):
+    first = device_password.get_device_password()
+    monkeypatch.setattr(device_password, "_announced_generated_password", False)
 
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setattr(device_password, "get_device_password_seed", lambda: "seed-value")
-
-    assert device_password.get_device_password() == "sage-fire"
+    assert device_password.get_device_password() == first
 
 
-def test_set_device_password_updates_managed_file(monkeypatch, tmp_path: Path):
-    password_file = tmp_path / "device_password"
-    managed_file = tmp_path / "device_managed"
-    password_file.write_text("old-password\n", encoding="utf-8")
-    managed_file.write_text("1\n", encoding="utf-8")
+def test_generated_password_does_not_depend_on_host_identity(monkeypatch, tmp_path):
+    first = device_password.get_device_password()
+    monkeypatch.setenv("PC1_GENERATED_PASSWORD_FILE", str(tmp_path / "other"))
 
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("PC1_DEVICE_MANAGED_FILE", str(managed_file))
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-
-    device_password.set_device_password("new-password-456")
-
-    assert password_file.read_text(encoding="utf-8").strip() == "new-password-456"
-    assert device_password.get_device_password() == "new-password-456"
-
-
-def test_reset_device_password_updates_managed_file(monkeypatch, tmp_path: Path):
-    password_file = tmp_path / "device_password"
-    managed_file = tmp_path / "device_managed"
-    password_file.write_text("old-password\n", encoding="utf-8")
-    managed_file.write_text("1\n", encoding="utf-8")
-
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(password_file))
-    monkeypatch.setenv("PC1_DEVICE_MANAGED_FILE", str(managed_file))
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setattr(
-        device_password,
-        "generate_device_password",
-        lambda length=device_password.DEFAULT_DEVICE_PASSWORD_LENGTH: "freshpass",
-    )
-
-    assert device_password.reset_device_password() == "freshpass"
-    assert password_file.read_text(encoding="utf-8").strip() == "freshpass"
-    assert device_password.get_device_password() == "freshpass"
+    assert device_password.get_device_password() != first

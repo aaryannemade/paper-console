@@ -18,7 +18,6 @@ def idle_printer(monkeypatch):
     monkeypatch.setattr(hardware, "print_in_progress", False)
     monkeypatch.setattr(hardware, "hold_action_in_progress", False)
     monkeypatch.setattr(hardware, "hold_action_started_at", 0.0)
-    monkeypatch.setattr(hardware, "printer_uart_reboot_pending", False)
 
 
 @pytest.mark.parametrize(
@@ -51,12 +50,6 @@ def test_stale_hold_expires_using_job_reservation_rules(monkeypatch):
     )
     assert main._read_printer_status() == {"ready": True, "reason": "idle"}
     assert hardware.hold_action_in_progress is False
-
-
-def test_uart_reboot_pending_is_unavailable_even_with_mock_fallback(monkeypatch):
-    monkeypatch.setattr(main, "_printer_is_available", lambda: True)
-    monkeypatch.setattr(hardware, "printer_uart_reboot_pending", True)
-    assert main._read_printer_status() == {"ready": False, "reason": "unavailable"}
 
 
 def test_driver_availability_failure_is_unavailable(monkeypatch):

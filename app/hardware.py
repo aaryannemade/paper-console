@@ -13,15 +13,10 @@ _is_raspberry_pi = platform.system() == "Linux" and os.path.exists(
     "/proc/device-tree/model"
 )
 
-printer_uart_preparation = None
-printer_uart_reboot_pending = False
+# Local serial/GPIO drivers remain until Step 3 moves printing to the ESP32 relay.
+# The server no longer edits boot files or reboots to configure the UART; see
+# docs/printer-uart-reference.md for the settings the old migration applied.
 if _is_raspberry_pi:
-    from app.printer_uart import prepare_printer_uart
-
-    printer_uart_preparation = prepare_printer_uart()
-    printer_uart_reboot_pending = printer_uart_preparation.suppress_printer_output
-
-if _is_raspberry_pi and not printer_uart_reboot_pending:
     try:
         from app.drivers.printer_serial import PrinterDriver
     except ImportError:

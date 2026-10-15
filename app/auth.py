@@ -33,12 +33,15 @@ def _current_admin_password() -> str:
 
 
 def _session_secret() -> bytes:
-    explicit_secret = os.environ.get("PC1_SESSION_SECRET", "").strip()
-    if explicit_secret:
-        seed = explicit_secret
-    else:
-        seed = device_password.get_device_password_seed()
+    # Key cookies with an operator secret, or the password itself. Never use host
+    # identity (hostname/machine-id), which is guessable for a networked container.
+    seed = os.environ.get("PC1_SESSION_SECRET", "").strip() or _current_admin_password()
     return hashlib.sha256(f"pc1-session::{seed}".encode("utf-8")).digest()
+
+
+def _secrets_match(candidate: str, expected: str) -> bool:
+    # compare_digest() rejects non-ASCII str, so compare UTF-8 bytes instead.
+    return hmac.compare_digest(candidate.encode("utf-8"), expected.encode("utf-8"))
 
 
 def _password_fingerprint() -> str:
@@ -100,7 +103,7 @@ def _read_session_payload(cookie_value: str) -> Optional[Dict[str, object]]:
 
 def is_admin_authenticated(request: Request) -> bool:
     provided_token = request.headers.get(TOKEN_HEADER, "").strip()
-    if provided_token and hmac.compare_digest(provided_token, _current_admin_password()):
+    if provided_token and _secrets_match(provided_token, _current_admin_password()):
         return True
 
     session_cookie = request.cookies.get(SESSION_COOKIE_NAME, "").strip()
@@ -114,7 +117,7 @@ def verify_admin_password(password: str) -> bool:
     candidate = (password or "").strip()
     if not candidate:
         return False
-    return hmac.compare_digest(candidate, _current_admin_password())
+    return _secrets_match(candidate, _current_admin_password())
 
 
 def set_admin_session_cookie(
@@ -151,7 +154,7 @@ def require_admin_access(request: Request):
 
     raise HTTPException(
         status_code=401,
-        detail="Device Password required or invalid.",
+        detail="Server password required or invalid.",
         headers={AUTH_REQUIRED_HEADER: "true"},
     )
 
@@ -162,14 +165,14 @@ def get_admin_auth_status(request: Optional[Request] = None) -> Dict[str, object
         "login_required": True,
         "authenticated": is_admin_authenticated(request) if request else False,
         "auth_mode": "device_password",
-        "password_label": "Device Password",
+        "password_label": "Server Password",
         "message": "Enter the server password to access settings.",
         "password_help": (
-            "Use the password configured with PC1_DEVICE_PASSWORD on the server. "
+            "Set with PC1_DEVICE_PASSWORD or PC1_DEVICE_PASSWORD_FILE. If neither is "
+            "set, a generated password is printed in the server log at startup. "
             "This browser can remember your login with a signed session cookie."
         ),
         "session_supported": True,
         "remember_supported": True,
         "device_password_source": device_password.get_device_password_source(),
-        "device_password_managed": device_password.is_device_managed(),
     }

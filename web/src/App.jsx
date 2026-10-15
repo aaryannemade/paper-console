@@ -27,7 +27,6 @@ function App() {
     longitude: 0,
     city_name: '',
     time_format: '12h',
-    release_channel: 'stable',
     modules: {},
     channels: {},
   });
@@ -92,7 +91,7 @@ function App() {
 
     const handleAuthRequired = (event) => {
       setAuthInfo((prev) => ({ ...(prev || {}), authenticated: false, login_required: true }));
-      setAuthError(event?.detail?.message || 'Your session expired. Enter the Device Password again.');
+      setAuthError(event?.detail?.message || 'Your session expired. Enter the server password again.');
     };
     window.addEventListener('pc1-auth-required', handleAuthRequired);
 

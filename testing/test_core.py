@@ -3,7 +3,6 @@
 from datetime import datetime
 from unittest.mock import MagicMock
 
-import app.device_password as device_password
 import app.modules  # noqa: F401 - triggers module auto-registration
 from app.config import Settings, format_print_datetime
 from app.module_registry import get_all_modules, validate_module_config
@@ -24,9 +23,11 @@ def test_default_settings_exclude_removed_module_types():
     )
 
 
-def test_default_settings_use_stable_release_channel():
-    settings = Settings()
-    assert settings.release_channel == "stable"
+def test_settings_drop_removed_host_admin_fields():
+    settings = Settings(time_sync_mode="automatic", release_channel="beta")
+    dumped = settings.model_dump()
+    assert "time_sync_mode" not in dumped
+    assert "release_channel" not in dumped
 
 
 def test_print_datetime_includes_configured_time_format():
@@ -47,20 +48,6 @@ def test_registry_excludes_removed_modules():
     registry = get_all_modules()
     assert "settings_menu" not in registry
     assert "ai" not in registry
-
-
-def test_password_env_override(monkeypatch, tmp_path):
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(tmp_path / "device_password"))
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD", "my-strong-password")
-    assert device_password.get_device_password() == "my-strong-password"
-
-
-def test_password_fallback_uses_device_hash(monkeypatch, tmp_path):
-    monkeypatch.delenv("PC1_DEVICE_PASSWORD", raising=False)
-    monkeypatch.setenv("PC1_DEVICE_PASSWORD_FILE", str(tmp_path / "device_password"))
-    monkeypatch.setattr(device_password, "get_device_password_seed", lambda: "seed-value")
-    expected = device_password.derive_device_password_from_seed("seed-value")
-    assert device_password.get_device_password() == expected
 
 
 def test_wifi_qr_payload_escapes_reserved_characters():

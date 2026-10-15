@@ -24,7 +24,7 @@ export async function loginAdminSession(password, remember = false) {
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.detail || 'Invalid Device Password');
+    throw new Error(data.detail || 'Invalid server password');
   }
 
   const data = await response.json().catch(() => ({}));

@@ -120,10 +120,10 @@ just test -k printer        # Forward arguments to pytest
 ```
 
 Log into the settings UI using the `PC1_DEVICE_PASSWORD` value exported in the
-backend terminal. The existing password header and signed browser sessions remain
-supported, but being on a local/setup network no longer bypasses login. Server
-startup does not configure host WiFi or print boot receipts; scheduled prints and
-explicit print actions still operate normally.
+backend terminal (if unset, a generated password is printed in the backend log).
+The server does not administer its host: no WiFi, SSH, OS password, clock, reboot,
+or in-place updates. It reads the host/container clock without changing it, and
+the timezone in settings (not the OS timezone) controls receipts and schedules.
 
 The flake provides `just`, Python 3.12, the application/test dependencies, Node.js 22
 (including npm), and launcher utilities on Linux and macOS, for x86-64 and ARM64.
@@ -262,7 +262,7 @@ Available modules: **News API**, **RSS Feeds**, **Weather**, **Email Inbox**, **
 Webhook clients can poll `GET /api/printer/status` without authentication. It returns
 `{"ready": true, "reason": "idle"}` when the printer driver is available and no
 print or button-hold action has reserved it. Otherwise, `ready` is `false` with
-reason `printing`, `hold`, or `unavailable` (including a pending printer UART reboot).
+reason `printing`, `hold`, or `unavailable`.
 
 This is an advisory snapshot of application readiness. It does not query the
 physical printer, detect paper/power faults, or reserve the next job. A print stays
@@ -282,12 +282,13 @@ These workflows use mock/local paths and do not require Raspberry Pi GPIO packag
 ### Security & Network Environment Variables
 For production deployments, configure these environment variables:
 
-* **`PC1_DEVICE_PASSWORD`**: Server password for settings login and the `X-PC1-Device-Password` API header. Set this explicitly for this fork.
-  On managed PC-1 devices, the runtime password is normally stored in the device-managed credential file instead. For scripted access, clients may send header `X-PC1-Device-Password`.
+* **`PC1_DEVICE_PASSWORD`**: Server password (min. 8 characters) for settings login and the `X-PC1-Device-Password` API header.
+* **`PC1_DEVICE_PASSWORD_FILE`**: Alternative to the above: path to a file containing the password (e.g. a Docker secret).
+  If neither is set, a random password is generated on first start, saved to `.device_password` (mode 0600; override the path with `PC1_GENERATED_PASSWORD_FILE`), and printed once in the server log.
+  The password is an application credential only; it is not synced to OS accounts, and changing it means changing the environment/secret and restarting.
+* **`PC1_SESSION_SECRET`**: Optional key for signing login cookies. Defaults to the password, so changing the password logs out existing sessions.
 * **Settings Login Sessions**: The web UI can remember a browser with a signed `HttpOnly` session cookie so users do not need to re-enter the password on every visit.
 * **`PC1_CORS_ORIGINS`**: Comma-separated CORS origins (default is local/dev origins only).
-* **`PC1_UPDATE_GITHUB_REPO`**: GitHub repo slug used by OTA release checks/install (default: `travmiller/paper-console`).
-* **`PC1_UPDATE_TARBALL_SHA256`**: Optional expected SHA256 for OTA tarball verification.
 * **`PC1_LOG_LEVEL`**: Backend log level (default: `WARNING` on device builds).
 * **`UVICORN_LOG_LEVEL`**: Uvicorn log level for `run.sh` (default: `warning`).
 * **`UVICORN_ACCESS_LOG`**: Set to `1` to enable HTTP access logs (default: `0` for lower log volume).
@@ -300,8 +301,9 @@ For non-git production units, build versioned release artifacts with:
 ./.venv/bin/python scripts/release_build.py --version v1.2.3 --build-web
 ```
 
-Devices can opt into beta OTA builds from **General Settings → Updates → Beta Releases**.
-See `scripts/RELEASE.md` for the current stable and beta release paths, including the tag-driven GitHub publish workflow, the recommended `main` and `beta` branch lanes, and hotfix guidance for stable OTA releases.
+In-place OTA updates were removed from the server in this fork; updates will ship
+as container images (Step 4). These scripts are legacy Pi tooling slated for removal
+in Step 5. See `scripts/RELEASE.md` for the current stable and beta release paths, including the tag-driven GitHub publish workflow, the recommended `main` and `beta` branch lanes, and hotfix guidance for stable OTA releases.
 
 ---
 
@@ -319,7 +321,7 @@ paper-console/
 │   ├── main.py                 # FastAPI app, dial/button loop, print orchestration
 │   ├── auth.py                 # Device-password auth and session helpers
 │   ├── config.py               # Settings, channels, schedules, module models
-│   ├── device_password.py      # Unified device password storage/loading
+│   ├── device_password.py      # Server password (env, secret file, or generated)
 │   ├── factory_reset.py        # Application settings reset (no host changes)
 │   ├── hardware.py             # Printer + dial/button singletons
 │   ├── location_lookup.py      # City/timezone lookup helpers
@@ -362,7 +364,6 @@ paper-console/
 │   └── vite.config.js
 ├── scripts/
 │   ├── setup_pi.sh
-│   ├── wifi_ap_nmcli.sh
 │   ├── release_build.py
 │   ├── prepare_golden_image.sh
 │   ├── deploy_automated.py

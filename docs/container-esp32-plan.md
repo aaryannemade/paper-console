@@ -1,7 +1,8 @@
 # Container + ESP32-S3 migration plan
 
-Status: architecture confirmed; Step 1 (1a + 1b) implemented. Steps 2–5 remain
-pending. ESP32 transport and firmware are not implemented yet.
+Status: architecture confirmed; Steps 1 and 2 implemented. Steps 3–5 remain
+pending. ESP32 transport and firmware are not implemented yet. Printer UART
+details for the firmware are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
 
@@ -89,7 +90,7 @@ Acceptance: startup/shutdown without sudo prompts or network management commands
 UI opens directly to application login/settings; no AP retry tasks or misleading
 WiFi receipts; channel printing and scheduling still work with mock output.
 
-## Step 2 — Remove host administration
+## Step 2 — Remove host administration (implemented)
 
 - Remove endpoints/UI for SSH, OS credentials, host reboot, system clock writes,
   Pi UART setup and in-place OTA installation.
@@ -109,7 +110,8 @@ have focused regression coverage.
   initial trigger API. It already accepts a channel directly, reserves the printer,
   and returns while work runs in the background.
 - Extract print orchestration/reservation from GPIO-oriented `app/hardware.py`.
-- Remove Pi detection, UART boot migration, GPIO drivers and button callbacks.
+- Remove Pi detection, GPIO drivers and button callbacks. (The UART boot migration
+  was already removed in Step 2.)
 - Replace shared dial state with explicit request inputs. Define HTTP interaction
   events for Adventure and other selection modes before removing their controls.
 - Extract rendering from `printer_serial.py`; preserve mock/capture outputs and
@@ -120,6 +122,8 @@ have focused regression coverage.
   local link-status UI, physical input events, HTTP print receiver and CSN-A2 UART
   relay. Keep application decisions in the container and test scheduled pushes as
   well as input-triggered pushes. Confirm board pin assignments when wiring firmware.
+  Follow [printer-uart-reference.md](printer-uart-reference.md) for serial settings,
+  raster strip framing, DTR handling and throughput/buffer sizing.
 
 Acceptance: HTTP triggers work without local hardware; concurrent requests and
 retries have defined behavior; full receipt snapshots preserve layout; physical
@@ -168,9 +172,30 @@ tests added), frontend lint/build, full print gallery (41 renders, 0 failures), 
 a live server smoke test (WiFi/probe routes 404, auth enforced, channel print works,
 no sudo/AP activity).
 
-Known leftovers for Step 2: `scripts/wifi_ap_nmcli.sh` is still used by
-`app/printer_uart.py` (Pi UART migration) and the legacy managed-password helpers;
-`device_password.py` still describes AP/SSH usage. These go with Pi host
-administration.
+Step 2 result: removed SSH status/enable/disable, Device Password change/status
+and OS-account password sync, host reboot, system clock set and NTP enable/disable,
+host timezone writes (including on settings save/import), in-place OTA
+check/install/convert-to-production, the `release_channel`/`time_sync_mode`
+settings (old configs still load), the Pi UART boot migration
+(`app/printer_uart.py`, `scripts/wifi_ap_nmcli.sh`, burn-in tool) and their UI.
+`GET /api/system/version` is now read-only (`.version` or git commit) and
+`GET /api/system/time` is a read-only display in the configured timezone.
 
-Next implementation: Step 2 (host administration removal).
+The password is now an application credential: `PC1_DEVICE_PASSWORD`, else
+`PC1_DEVICE_PASSWORD_FILE` (Docker secret), else a random password generated once,
+persisted with mode 0600 and logged once. Too-short or unreadable configured
+values fail startup instead of silently falling back. Login cookies are keyed by
+`PC1_SESSION_SECRET` or the password, no longer by hostname/machine-id (the old
+fallback password and cookie key were derivable from host identity).
+
+Verification: 283 backend tests, including route-absence and a source scan for
+privileged host commands in `app/`, password resolution/persistence/permissions,
+cookie-forgery and non-ASCII password tests; frontend lint/build; live server smoke
+test (see below).
+
+Left for later steps: GPIO drivers and Pi detection in `app/hardware.py`
+(Step 3); `run.sh` service handling, `scripts/setup_pi.sh`, release/OTA build
+scripts and workflow (Step 5). `GET /api/system/timezone` and the location default
+still try read-only `timedatectl show`, which falls back cleanly in a container.
+
+Next implementation: Step 3 (HTTP relay protocol and ESP32-S3 firmware).
