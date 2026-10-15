@@ -105,32 +105,44 @@ Project commands assume a Unix-like shell environment. On Windows, use WSL.
 
 #### Nix development shell
 
+The proposed container/ESP32-S3 migration is documented in
+[the migration plan](docs/container-esp32-plan.md).
+
 With Nix installed and the `nix-command` and `flakes` features enabled:
 
 ```bash
 nix develop
 
 # Backend (mock hardware on non-Pi hosts)
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+just backend
 
 # In another terminal, also inside nix develop:
-npm --prefix web ci
-npm --prefix web run dev
+just frontend-install
+just frontend
 
 # Tests and print snapshots
-python -m pytest -q testing
+just test
 python testing/render_all_prints.py --output-dir testing/artifacts/print
 ```
 
-The flake provides Python 3.12, the application/test dependencies, Node.js 22
+Run `just` to list recipes. `just backend` watches only `app/`, so installing
+frontend dependencies does not restart the backend. Optional examples:
+
+```bash
+just backend 0.0.0.0 8000   # Allow access from other devices on the LAN
+just frontend --host 0.0.0.0
+just test -k printer        # Forward arguments to pytest
+```
+
+The flake provides `just`, Python 3.12, the application/test dependencies, Node.js 22
 (including npm), and launcher utilities on Linux and macOS, for x86-64 and ARM64.
 `flake.lock` pins the Nix package set; frontend dependencies use
 `web/package-lock.json`. The first shell entry downloads the Nix dependencies;
 `npm ci` separately installs the frontend dependencies.
 
-Use the direct `python` commands above in this shell rather than
+The recipes use Python from the shell rather than
 `testing/run_tests.sh`, which creates a pip-managed `.venv`. Likewise, `run.sh`
-prefers an existing `.venv`, so the direct backend command ensures it uses the
+prefers an existing `.venv`, so the backend recipe ensures it uses the
 Nix-provided Python. Enter the shell without an activated virtual environment.
 No `.venv` is created or modified by the flake. If Python requirements change,
 update the package list in `flake.nix` as well.

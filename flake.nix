@@ -49,6 +49,7 @@
               python
               pkgs.nodejs_22 # Vite 7 requires Node >= 20.19 or >= 22.12.
               pkgs.git
+              pkgs.just
               pkgs.bash
               pkgs.lsof
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.procps ];
@@ -58,9 +59,9 @@
 
             shellHook = ''
               echo "Paper Console: Python 3.12 + Node.js 22 (Nix-managed dependencies)"
-              echo "Backend: python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
-              echo "Tests:   python -m pytest -q testing"
-              echo "UI:      npm --prefix web ci && npm --prefix web run dev"
+              echo "Backend: just backend"
+              echo "Tests:   just test"
+              echo "UI:      just frontend-install && just frontend"
             '';
           };
         });
