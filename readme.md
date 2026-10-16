@@ -38,7 +38,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 * **API Docs:** 
   * Local: [http://localhost:8000/docs](http://localhost:8000/docs)
-* **Mock Output:** Watch your Terminal window. The "Printer" writes text there.
+* **Print output:** With `just backend` (console output) receipts are logged in the terminal; see [Print outputs](#print-outputs).
 
 **Frontend (Settings UI):**
 ```bash
@@ -63,9 +63,11 @@ link-status UI), which is not implemented yet.
 2. Open the settings UI and log in with that password.
 3. Configure channels, modules, and schedules.
 
-**Physical controls** (relayed by the ESP32 once implemented; currently mock/GPIO):
+**Physical controls** are relayed by the ESP32 as HTTP input events (see
+[the relay protocol](docs/relay-protocol.md)); the firmware is not written yet, so
+use `just device ...` to send the same events during development.
 
-- Turn the dial to select a channel (1-8); press the button to print it.
+- Select a channel (1-8); press the button to print it.
 - Hold ~5 seconds, then release, for **Quick Actions**:
   - `1` Table of Contents
   - `2` System Monitor
@@ -95,9 +97,14 @@ With Nix installed and the `nix-command` and `flakes` features enabled:
 ```bash
 nix develop
 
-# Backend (mock hardware on non-Pi hosts)
+# Backend (prints are logged to the console)
 export PC1_DEVICE_PASSWORD='choose-your-local-server-password'
+export PC1_RELAY_TOKEN='choose-a-device-token-16+chars'   # enables device input events
 just backend
+
+# In another terminal: act as the ESP32's controls (same PC1_RELAY_TOKEN)
+just device position 5
+just device press
 
 # In another terminal, also inside nix develop:
 just frontend-install
@@ -124,6 +131,28 @@ backend terminal (if unset, a generated password is printed in the backend log).
 The server does not administer its host: no WiFi, SSH, OS password, clock, reboot,
 or in-place updates. It reads the host/container clock without changing it, and
 the timezone in settings (not the OS timezone) controls receipts and schedules.
+
+#### Print outputs
+
+Every receipt is rendered by the same renderer into one 384-dot-wide bitmap, then
+handed to the output selected by `PC1_PRINTER_OUTPUT`:
+
+| Value | Use | Behavior |
+| --- | --- | --- |
+| `esp32` | Production (default) | Pushes jobs to the ESP32-S3 relay over HTTP ([protocol](docs/relay-protocol.md)). Needs `PC1_RELAY_TOKEN` and heartbeats from the device; `PC1_RELAY_URL` optionally pins the device URL. Develop against `just relay-sim`. |
+| `console` | Development (`just backend` default) | Logs `[PRINT]` text lines plus a `[RECEIPT]` line with size and byte count. Set `PC1_PRINT_CAPTURE_DIR` to also save each receipt as PNG. |
+| `usb` | Development only | Prints on a CSN-A2 connected through a USB-serial (TTL) adapter. `PC1_PRINTER_PORT` overrides auto-detection (`/dev/serial/by-id/*`, `/dev/ttyUSB*`, `/dev/ttyACM*`); `PC1_PRINTER_BAUDRATE` defaults to 9600. Your user needs serial port access (usually the `dialout` group). |
+
+```bash
+PC1_PRINT_CAPTURE_DIR=testing/artifacts/live just backend   # console + PNGs
+PC1_PRINTER_OUTPUT=usb just backend                         # real printer over USB
+```
+
+When the output is unavailable (ESP32 offline, USB adapter unplugged), prints are
+skipped and logged: UI/API requests get `503`, and scheduled, email and Slack
+prints are dropped. Nothing is queued. `/api/health` reports the printer state
+but does not mark the server degraded for it. An unknown `PC1_PRINTER_OUTPUT`
+value stops startup.
 
 The flake provides `just`, Python 3.12, the application/test dependencies, Node.js 22
 (including npm), and launcher utilities on Linux and macOS, for x86-64 and ARM64.
@@ -286,6 +315,8 @@ For production deployments, configure these environment variables:
 * **`PC1_DEVICE_PASSWORD_FILE`**: Alternative to the above: path to a file containing the password (e.g. a Docker secret).
   If neither is set, a random password is generated on first start, saved to `.device_password` (mode 0600; override the path with `PC1_GENERATED_PASSWORD_FILE`), and printed once in the server log.
   The password is an application credential only; it is not synced to OS accounts, and changing it means changing the environment/secret and restarting.
+* **`PC1_RELAY_URL`**: Optional fixed base URL of the ESP32 (otherwise the `callback_url` from its heartbeat is used).
+* **`PC1_RELAY_TOKEN`** / **`PC1_RELAY_TOKEN_FILE`**: Shared bearer token for the ESP32 relay (at least 16 characters), used in both directions. Without it, `/api/device/events` answers 503. See [docs/relay-protocol.md](docs/relay-protocol.md).
 * **`PC1_SESSION_SECRET`**: Optional key for signing login cookies. Defaults to the password, so changing the password logs out existing sessions.
 * **Settings Login Sessions**: The web UI can remember a browser with a signed `HttpOnly` session cookie so users do not need to re-enter the password on every visit.
 * **`PC1_CORS_ORIGINS`**: Comma-separated CORS origins (default is local/dev origins only).
@@ -326,16 +357,20 @@ paper-console/
 │   ├── hardware.py             # Printer + dial/button singletons
 │   ├── location_lookup.py      # City/timezone lookup helpers
 │   ├── module_registry.py      # @register_module metadata and validation
-│   ├── selection_mode.py       # Dial-driven interactive selection flows
+│   ├── selection_mode.py       # Position-driven interactive selection flows
+│   ├── device_input.py         # ESP32 input events: position + button gestures
+│   ├── relay_auth.py           # Shared container/ESP32 bearer token
+│   ├── relay_link.py           # ESP32 heartbeat, link status, job status
 │   ├── qr_payloads.py          # QR content encoders (WiFi/contact QR modules)
 │   ├── utils.py
 │   ├── data/                   # Bundled offline content and lookup datasets
 │   ├── drivers/
-│   │   ├── printer_serial.py   # Thermal printer (hardware)
-│   │   ├── printer_mock.py     # Console / capture (dev)
-│   │   ├── dial_gpio.py / dial_mock.py
-│   │   ├── button_gpio.py / button_mock.py
-│   │   └── gpio_ioctl.py
+│   │   ├── printer_raster.py   # Receipt renderer (bitmap for every output)
+│   │   ├── print_outputs.py    # Output selection; console and esp32 outputs
+│   │   ├── usb_serial_output.py # USB-serial printer output (dev only)
+│   │   ├── esp32_relay_output.py # ESP32 relay output (production)
+│   │   ├── escpos.py           # CSN-A2 command encoding (raster strips, feeds)
+│   │   └── printer_mock.py     # [PRINT] text echo for console output and tests
 │   ├── modules/                # Printable module implementations
 │   │   ├── adventure.py        # Interactive CYOA (dial)
 │   │   ├── astronomy.py

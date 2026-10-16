@@ -119,12 +119,13 @@ from app.modules import email_client, webhook, text, calendar, weather
 import app.print_webhook_service as print_webhook_service
 
 import app.device_password as device_password
+import app.device_input as device_input
+import app.relay_auth as relay_auth
+import app.relay_link as relay_link
 import app.hardware as hardware
 from app.hardware import (
     printer,
     dial,
-    button,
-    _is_raspberry_pi,
     try_begin_print_job,
     reserve_hold_action,
     promote_hold_to_print_job,
@@ -167,6 +168,15 @@ def _printer_is_available() -> bool:
             return False
     # Mock drivers generally have no explicit availability method.
     return True
+
+
+def _require_printer_available():
+    """Reject a print request up front when the output cannot take it (no queue)."""
+    if not _printer_is_available():
+        mode = getattr(printer, "output_mode", "unknown")
+        raise HTTPException(
+            status_code=503, detail=f"Printer unavailable (output: {mode})"
+        )
 
 
 def _read_printer_status() -> Dict[str, object]:
@@ -519,41 +529,46 @@ async def scheduler_loop():
             await asyncio.sleep(60)
 
 
-# --- HARDWARE CALLBACKS ---
+# --- DEVICE INPUT GESTURES ---
+#
+# Called by app.device_input for button events from the ESP32. Each returns a
+# short outcome string that is sent back to the device. Every gesture needs a
+# reachable printer: the receipt is the device's only feedback.
 
-# Print state tracking lives in app.hardware so any producer (button,
+# Print state tracking lives in app.hardware so any producer (device input,
 # scheduler, email polling, webhooks, Slack) can share the same reservation.
 
 global_loop = None
 
 
-def on_button_press_threadsafe():
-    """Callback that schedules the trigger on the main event loop."""
-    global global_loop
+def _loop_ready() -> bool:
+    return bool(global_loop and global_loop.is_running())
 
+
+def handle_button_press() -> str:
+    """Short press: choose in the active menu, otherwise print the current channel."""
+    from app.selection_mode import can_handle_selection, is_selection_mode_active
+
+    if not _printer_is_available():
+        return "printer_unavailable"
     if not try_begin_print_job(debounce=True):
-        return
+        return "busy"
 
     try:
-        if global_loop and global_loop.is_running():
-            # Check for selection mode (adventure game, quick actions, etc.)
-            from app.selection_mode import is_selection_mode_active
-
-            if is_selection_mode_active():
-                # In selection mode: use dial position as choice input
-                position = dial.read_position()
-                asyncio.run_coroutine_threadsafe(
-                    handle_selection_async(position), global_loop
-                )
-            else:
-                # Normal mode: trigger the current channel
-                asyncio.run_coroutine_threadsafe(trigger_current_channel(), global_loop)
-        else:
-            # Loop not running, reset flag
+        if not _loop_ready():
             clear_print_reservation(clear_hold=False)
+            return "not_ready"
+        if is_selection_mode_active():
+            position = dial.read_position()
+            accepted = can_handle_selection(position)
+            asyncio.run_coroutine_threadsafe(handle_selection_async(position), global_loop)
+            return "selection" if accepted else "selection_ignored"
+        asyncio.run_coroutine_threadsafe(trigger_current_channel(), global_loop)
+        return "printing_channel"
     except Exception:
-        # Failed to schedule, reset flag
+        logger.exception("Failed to schedule button press")
         clear_print_reservation(clear_hold=False)
+        return "error"
 
 
 async def handle_selection_async(dial_position: int):
@@ -579,41 +594,52 @@ async def handle_selection_async(dial_position: int):
         clear_print_reservation(clear_hold=False)
 
 
-def on_button_long_press_threadsafe():
-    """Callback for long press (5 seconds) - opens quick actions menu."""
-    global global_loop
-
-    if not promote_hold_to_print_job() and not try_begin_print_job(debounce=False):
-        return
-
+def handle_button_hold() -> str:
+    """5 s reached while held: cancel the active print, or arm Quick Actions."""
+    # While a receipt is active, this gesture cancels it. The device input
+    # processor then ignores the rest of this press (release / 15 s hold).
+    if request_print_cancel():
+        return "cancel_requested"
+    if not _printer_is_available():
+        return "printer_unavailable"
+    if not reserve_hold_action():
+        return "busy"
     try:
-        if global_loop and global_loop.is_running():
-            asyncio.run_coroutine_threadsafe(long_press_menu_trigger(), global_loop)
-        else:
-            clear_print_reservation()
-    except Exception:
-        clear_print_reservation()
-
-
-def on_button_long_press_ready_threadsafe():
-    """Callback fired at 5s hold threshold to signal 'you can release now'."""
-    try:
-        # While a receipt is active, the same five-second gesture cancels it.
-        # Returning True tells the button driver not to open Quick Actions when
-        # this press is released (or escalate it to factory reset at 15s).
-        if request_print_cancel():
-            return True
-
-        if not reserve_hold_action():
-            return False
-        # Half-line tactile feed cue.
+        # Half-line tactile feed cue: "you can release now".
         if hasattr(printer, "feed_dots"):
             printer.feed_dots(12)
         elif hasattr(printer, "blip"):
             printer.blip()
     except Exception:
-        logger.debug("Long-press ready tactile cue failed", exc_info=True)
-    return False
+        logger.debug("Hold tactile cue failed", exc_info=True)
+    return "hold_ready"
+
+
+def _begin_hold_action() -> Optional[str]:
+    """Turn the armed hold into a print job; return an outcome on failure."""
+    if not _printer_is_available():
+        clear_print_reservation()
+        return "printer_unavailable"
+    if not promote_hold_to_print_job() and not try_begin_print_job(debounce=False):
+        return "busy"
+    if not _loop_ready():
+        clear_print_reservation()
+        return "not_ready"
+    return None
+
+
+def handle_button_hold_release() -> str:
+    """Released between 5 and 15 s: print the Quick Actions menu."""
+    failure = _begin_hold_action()
+    if failure:
+        return failure
+    try:
+        asyncio.run_coroutine_threadsafe(long_press_menu_trigger(), global_loop)
+    except Exception:
+        logger.exception("Failed to schedule Quick Actions")
+        clear_print_reservation()
+        return "error"
+    return "quick_actions"
 
 
 def _print_channel_config_summary(position: int):
@@ -899,8 +925,6 @@ async def long_press_menu_trigger():
         return
 
     quick_actions_id = f"quick-actions-{position}"
-    if hasattr(button, "drain_pending_events"):
-        button.drain_pending_events()
     enter_selection_mode(
         _handle_quick_action,
         quick_actions_id,
@@ -996,17 +1020,20 @@ async def factory_reset_trigger():
         clear_print_reservation()
 
 
-def on_factory_reset_threadsafe():
-    """Callback for factory reset press (15+ seconds)."""
-    global global_loop
-    if not promote_hold_to_print_job() and not try_begin_print_job(debounce=False):
-        logger.info("Ignoring factory reset hold because printer is already busy.")
-        return
-
-    if global_loop and global_loop.is_running():
+def handle_button_long_hold() -> str:
+    """15 s reached while held: reset application settings."""
+    failure = _begin_hold_action()
+    if failure:
+        if failure == "busy":
+            logger.info("Ignoring factory reset hold because printer is already busy.")
+        return failure
+    try:
         asyncio.run_coroutine_threadsafe(factory_reset_trigger(), global_loop)
-    else:
+    except Exception:
+        logger.exception("Failed to schedule factory reset")
         clear_print_reservation()
+        return "error"
+    return "factory_reset"
 
 
 @asynccontextmanager
@@ -1023,6 +1050,11 @@ async def lifespan(app: FastAPI):
     logger.info(
         "Settings password source: %s", device_password.get_device_password_source()
     )
+    # Fail fast on a misconfigured relay token; without one the device API is off.
+    if relay_auth.get_relay_token() is None:
+        logger.warning(
+            "%s is not set; device input events are disabled.", relay_auth.TOKEN_ENV
+        )
 
     # Clear printer hardware buffer first to prevent startup garbage
     # Run in thread pool to avoid blocking event loop
@@ -1038,9 +1070,10 @@ async def lifespan(app: FastAPI):
         logger.exception(
             "Printer startup initialization failed (continuing without blocking startup)"
         )
-    if _is_raspberry_pi and not _printer_is_available():
+    if not _printer_is_available():
         logger.warning(
-            "Printer driver is unavailable at startup; hardware printing may fail until serial is restored."
+            "Printer output %r is unavailable at startup; prints are skipped until it is reachable.",
+            getattr(printer, "output_mode", "unknown"),
         )
 
     # The server does not provision host networking or print on restart.
@@ -1056,16 +1089,16 @@ async def lifespan(app: FastAPI):
     slack_manager.init_runtime(trigger_channel)
     asyncio.create_task(slack_manager.reconcile())
 
-    # Initialize Main Button Callbacks
-    # Short press = Print
-    button.set_callback(on_button_press_threadsafe)
-    # Long press (5s) = Quick actions menu
-    button.set_long_press_callback(on_button_long_press_threadsafe)
-    # Long-press threshold reached (5s) = tactile cue
-    if hasattr(button, "set_long_press_ready_callback"):
-        button.set_long_press_ready_callback(on_button_long_press_ready_threadsafe)
-    # Factory reset (15s) = Factory Reset
-    button.set_factory_reset_callback(on_factory_reset_threadsafe)
+    # Physical inputs arrive as HTTP events from the ESP32 (POST /api/device/events).
+    # Lambdas resolve the handlers at call time.
+    device_input.processor.reset()
+    device_input.init_runtime(
+        dial,
+        press=lambda: handle_button_press(),
+        hold=lambda: handle_button_hold(),
+        hold_release=lambda: handle_button_hold_release(),
+        long_hold=lambda: handle_button_long_hold(),
+    )
 
     yield
 
@@ -1085,13 +1118,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Slack shutdown failed")
 
-    # Cleanup hardware drivers
+    # Release the print output (closes a USB serial port)
     if hasattr(printer, "close"):
         printer.close()
-    if hasattr(dial, "cleanup"):
-        dial.cleanup()
-    if hasattr(button, "cleanup"):
-        button.cleanup()
 
 
 app = FastAPI(
@@ -1102,6 +1131,9 @@ app = FastAPI(
 )
 
 # Allow Frontend (React) to talk to Backend
+app.include_router(device_input.router)
+app.include_router(relay_link.router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_parse_cors_origins(),
@@ -1217,9 +1249,11 @@ async def health_check():
     health["components"]["printer"] = (
         "available" if _printer_is_available() else "unavailable"
     )
-    health["components"]["dial"] = "available" if dial else "unavailable"
-    health["components"]["button"] = "available" if button else "unavailable"
-    health["components"]["gpio"] = "available" if _is_raspberry_pi else "mock"
+    health["components"]["printer_output"] = getattr(printer, "output_mode", "unknown")
+    health["components"]["device_input"] = (
+        "enabled" if relay_auth.relay_token_source() != "unset" else "disabled"
+    )
+    health["components"]["relay_link"] = relay_link.link.snapshot()["state"]
 
     # Check config file
     import app.config as config_module
@@ -1236,8 +1270,8 @@ async def health_check():
         critical_issues.append("email_polling stopped")
     if health["components"]["scheduler"] == "stopped":
         critical_issues.append("scheduler stopped")
-    if _is_raspberry_pi and health["components"]["printer"] == "unavailable":
-        critical_issues.append("printer unavailable")
+    # An unreachable printer (e.g. the ESP32 is offline) is reported above but is
+    # not a server health failure; prints are skipped until it returns.
 
     if critical_issues:
         health["status"] = "degraded"
@@ -2613,7 +2647,8 @@ async def trigger_current_channel():
 
 @app.post("/action/trigger", dependencies=[Depends(require_admin_access)])
 async def manual_trigger():
-    """Simulates pressing the big brass button."""
+    """Print the channel at the current position (like a device button press)."""
+    _require_printer_available()
     if not try_begin_print_job(debounce=False):
         raise HTTPException(status_code=409, detail="Print already in progress")
 
@@ -2634,7 +2669,7 @@ async def debug_cancel_print():
 
 @app.post("/action/dial/{position}", dependencies=[Depends(require_admin_access)])
 async def set_dial(position: int):
-    """Simulates turning the physical rotary switch."""
+    """Set the channel position (normally reported by the ESP32)."""
     if position < 1 or position > 8:
         raise HTTPException(status_code=400, detail="Position must be 1-8")
 
@@ -2653,6 +2688,7 @@ async def print_channel(position: int, background_tasks: BackgroundTasks):
     if position < 1 or position > 8:
         raise HTTPException(status_code=400, detail="Position must be 1-8")
 
+    _require_printer_available()
     if not try_begin_print_job(debounce=False):
         raise HTTPException(status_code=409, detail="Print already in progress")
 
@@ -2675,6 +2711,7 @@ async def print_module(module_id: str, background_tasks: BackgroundTasks):
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
 
+    _require_printer_available()
     if not try_begin_print_job(debounce=False):
         raise HTTPException(status_code=409, detail="Print already in progress")
 
@@ -2771,6 +2808,7 @@ async def receive_print_webhook(
         body=body,
     )
 
+    _require_printer_available()
     if not try_begin_print_job(debounce=False):
         raise HTTPException(status_code=423, detail="Printer is already busy")
 

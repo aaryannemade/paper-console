@@ -121,19 +121,8 @@ from app.selection_mode import (
 )
 
 
-def _drain_pending_button_events():
-    """Discard button edges queued during the receipt that just printed."""
-    try:
-        from app.hardware import button
-
-        if hasattr(button, "drain_pending_events"):
-            button.drain_pending_events()
-    except Exception:
-        logger.debug("Adventure: failed to drain pending button events", exc_info=True)
-
-
 def _enter_adventure_selection(module_id: str, printer):
-    """Arm the next adventure choice only after stale button events are gone."""
+    """Arm the next adventure choice (presses during the print were rejected as busy)."""
     state = load_state(module_id)
     story = load_story()
     current_node = get_node(story, state.current_node)
@@ -146,7 +135,6 @@ def _enter_adventure_selection(module_id: str, printer):
     else:
         valid_positions = {8}
 
-    _drain_pending_button_events()
     enter_selection_mode(
         lambda pos: process_choice(module_id, pos, printer),
         module_id,
@@ -415,6 +403,6 @@ def format_adventure_receipt(
     # Print the current story node
     print_story_node(printer, story, current_node, state, module_name or meta.get("title", "Adventure"))
 
-    # Enter selection mode after the receipt content is staged so queued button
-    # edges from the triggering press cannot immediately select a choice.
+    # Enter selection mode after the receipt content is staged. Presses that
+    # arrive while this print holds the reservation are rejected as busy.
     _enter_adventure_selection(module_id, printer)

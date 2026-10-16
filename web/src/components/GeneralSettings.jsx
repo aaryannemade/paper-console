@@ -50,6 +50,42 @@ const GeneralSettings = ({
       .catch((err) => console.error('Error fetching version:', err));
   }, []);
 
+  // Print output and ESP32 relay link status (polled; derived from heartbeats).
+  const [printerLink, setPrinterLink] = useState(null);
+
+  useEffect(() => {
+    const fetchLink = async () => {
+      try {
+        const response = await adminAuthFetch('/api/printer/link');
+        if (response.ok) setPrinterLink(await response.json());
+      } catch (err) {
+        console.error('Error fetching printer link:', err);
+      }
+    };
+
+    fetchLink();
+    const interval = setInterval(fetchLink, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const linkLabel = (link) => {
+    if (!link) return 'Loading…';
+    if (link.output_mode === 'console') return 'Console (development: receipts are logged)';
+    if (link.output_mode === 'usb') return 'USB printer (development)';
+    return {
+      online: link.available ? 'ESP32 online' : 'ESP32 online, printer not ready',
+      offline: 'ESP32 offline',
+      unreachable: 'ESP32 unreachable',
+      never_seen: 'Waiting for ESP32',
+    }[link.state] || link.state;
+  };
+
+  const linkDotClass = (link) => {
+    if (!link) return 'bg-gray-300';
+    if (link.output_mode !== 'esp32') return 'bg-gray-400';
+    return link.available ? 'bg-green-500' : 'bg-red-500';
+  };
+
   const getApiError = (data, fallback) => {
     return data?.detail || data?.error || data?.message || fallback;
   };
@@ -252,6 +288,31 @@ const GeneralSettings = ({
       <div className='rounded-xl p-[4px] shadow-lg' style={{ background: inkGradients[3] }}>
         <div className='bg-bg-card rounded-lg p-4 flex flex-col'>
           <h3 className='font-bold text-black  text-lg tracking-tight mb-3'>Printer Settings</h3>
+          <div className='mb-4' data-testid='printer-link'>
+            <label className={labelClass}>Printer Connection</label>
+            <div className='flex items-center gap-2 text-sm text-black'>
+              <span className={`inline-block w-2.5 h-2.5 rounded-full ${linkDotClass(printerLink)}`} />
+              <span className='font-bold'>{linkLabel(printerLink)}</span>
+            </div>
+            {printerLink?.output_mode === 'esp32' && (
+              <div className='text-xs text-gray-600 mt-1 space-y-0.5'>
+                {!printerLink.available && <p>{printerLink.reason}</p>}
+                {printerLink.device_id && (
+                  <p>
+                    {printerLink.device_id}
+                    {printerLink.firmware ? ` · firmware ${printerLink.firmware}` : ''}
+                    {printerLink.heartbeat_age_s != null ? ` · last heartbeat ${Math.round(printerLink.heartbeat_age_s)} s ago` : ''}
+                  </p>
+                )}
+                {printerLink.last_job && (
+                  <p>
+                    Last receipt: {printerLink.last_job.state}
+                    {printerLink.last_job.error ? ` (${printerLink.last_job.error})` : ''}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
           <div>
             <label className={labelClass}>Maximum Print Lines</label>
             <input

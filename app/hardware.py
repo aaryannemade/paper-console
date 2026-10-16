@@ -1,49 +1,50 @@
 import logging
-import os
-import platform
 import threading
 import time
 
 from app.config import PRINTER_WIDTH
+from app.drivers.print_outputs import create_output
+from app.drivers.printer_mock import PrinterDriver as TextEchoPrinter
+from app.drivers.printer_raster import RasterPrinter
+from app.device_input import ChannelSelector
 
 logger = logging.getLogger(__name__)
 
-# Auto-detect platform and use appropriate drivers
-_is_raspberry_pi = platform.system() == "Linux" and os.path.exists(
-    "/proc/device-tree/model"
-)
 
-# Local serial/GPIO drivers remain until Step 3 moves printing to the ESP32 relay.
-# The server no longer edits boot files or reboots to configure the UART; see
-# docs/printer-uart-reference.md for the settings the old migration applied.
-if _is_raspberry_pi:
+def create_printer() -> RasterPrinter:
+    """Build the receipt renderer for the output chosen by PC1_PRINTER_OUTPUT.
+
+    Every output shares the same renderer. Console mode also echoes readable
+    [PRINT] text lines. An unsupported value fails startup.
+    """
+    output = create_output()
+    echo = TextEchoPrinter(width=PRINTER_WIDTH) if output.mode == "console" else None
+    logger.info("Printer output: %s", output.mode)
+    return RasterPrinter(width=PRINTER_WIDTH, output=output, echo=echo)
+
+
+# Global instances. Physical inputs arrive as HTTP events from the ESP32
+# (app/device_input.py); `dial` holds the last reported channel position.
+printer = create_printer()
+dial = ChannelSelector()
+
+
+def printer_is_available() -> bool:
+    """Best-effort check that the print output can accept a receipt."""
+    if not printer:
+        return False
+    checker = getattr(printer, "is_available", None)
+    if not callable(checker):
+        return True
     try:
-        from app.drivers.printer_serial import PrinterDriver
-    except ImportError:
-        from app.drivers.printer_mock import PrinterDriver
-else:
-    from app.drivers.printer_mock import PrinterDriver
+        return bool(checker())
+    except Exception:
+        logger.debug("Printer availability probe failed", exc_info=True)
+        return False
 
-if _is_raspberry_pi:
-    try:
-        from app.drivers.dial_gpio import DialDriver
-        from app.drivers.button_gpio import ButtonDriver
-    except ImportError:
-        from app.drivers.dial_mock import DialDriver
-        from app.drivers.button_mock import ButtonDriver
-else:
-    from app.drivers.dial_mock import DialDriver
-    from app.drivers.button_mock import ButtonDriver
-
-# Global Hardware Instances
-printer = PrinterDriver(width=PRINTER_WIDTH)
-dial = DialDriver()
-
-# Main Interface Button (Print / WiFi Setup / Reset) - GPIO 25 (Pin 22)
-button = ButtonDriver(pin=25)
 
 # --- PRINT ORCHESTRATION ---
-# Shared reservation state so any producer (button, scheduler, email poll,
+# Shared reservation state so any producer (device input, scheduler, email poll,
 # webhooks, Slack, etc.) can claim the printer without racing the others.
 print_lock = threading.Lock()
 print_in_progress = False
@@ -79,6 +80,15 @@ def expire_stale_hold_action_locked(current_time: float):
 def try_begin_print_job(*, debounce: bool = False) -> bool:
     """Reserve the printer for a new print job."""
     global print_in_progress, last_print_time
+
+    # Checked outside the lock: reopening a USB port can take a moment.
+    if not printer_is_available():
+        # Offline policy: skip and log; nothing is queued for later.
+        logger.warning(
+            "Print skipped: printer output %r is unavailable",
+            getattr(printer, "output_mode", "unknown"),
+        )
+        return False
 
     with print_lock:
         current_time = time.time()
@@ -158,13 +168,3 @@ def clear_print_reservation(*, clear_hold: bool = True):
         if clear_hold:
             hold_action_in_progress = False
             hold_action_started_at = 0.0
-
-    # Do not disturb the press that requested cancellation while it is still
-    # physically held; its release must remain marked as consumed.
-    if not getattr(button, "is_pressed", False) and hasattr(
-        button, "drain_pending_events"
-    ):
-        try:
-            button.drain_pending_events()
-        except Exception:
-            logger.debug("Failed to drain button events after print completion", exc_info=True)

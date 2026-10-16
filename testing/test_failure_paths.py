@@ -15,7 +15,6 @@ import pytest
 import app.main as main_module
 import app.hardware as hardware_module
 from app.config import CalendarConfig, ChannelConfig, ChannelModuleAssignment, ModuleInstance
-from app.drivers.printer_serial import PrinterDriver
 from app.drivers.printer_mock import PrinterDriver as MockPrinterDriver
 from app.modules import email_client
 from app.modules import quotes as quotes_module
@@ -67,14 +66,8 @@ def test_try_begin_print_job_respects_hold_reservation(monkeypatch):
 
 def test_clear_print_reservation_updates_debounce_from_completion(monkeypatch):
     now = 1_000.0
-    drained = []
-
-    class FakeButton:
-        def drain_pending_events(self):
-            drained.append("drained")
 
     monkeypatch.setattr(hardware_module.time, "time", lambda: now)
-    monkeypatch.setattr(hardware_module, "button", FakeButton())
     monkeypatch.setattr(hardware_module, "print_in_progress", True)
     monkeypatch.setattr(hardware_module, "hold_action_in_progress", False)
     monkeypatch.setattr(hardware_module, "hold_action_started_at", 0.0)
@@ -84,25 +77,6 @@ def test_clear_print_reservation_updates_debounce_from_completion(monkeypatch):
 
     assert hardware_module.print_in_progress is False
     assert hardware_module.last_print_time == now
-    assert drained == ["drained"]
-
-
-def test_clear_print_reservation_preserves_an_active_button_hold(monkeypatch):
-    drained = []
-
-    class FakeButton:
-        is_pressed = True
-
-        def drain_pending_events(self):
-            drained.append("drained")
-
-    monkeypatch.setattr(hardware_module, "button", FakeButton())
-    monkeypatch.setattr(hardware_module, "print_in_progress", True)
-
-    hardware_module.clear_print_reservation(clear_hold=False)
-
-    assert hardware_module.print_in_progress is False
-    assert drained == []
 
 
 def test_print_cancellation_tracks_active_job_and_resets_for_next_job(monkeypatch):
@@ -140,7 +114,7 @@ def test_long_press_threshold_cancels_print_without_reserving_menu(monkeypatch):
         main_module, "reserve_hold_action", lambda: calls.append("reserve") or True
     )
 
-    assert main_module.on_button_long_press_ready_threadsafe() is True
+    assert main_module.handle_button_hold() == "cancel_requested"
     assert calls == ["cancel"]
 
 
@@ -157,7 +131,7 @@ def test_long_press_threshold_preserves_quick_actions_when_idle(monkeypatch):
         main_module, "reserve_hold_action", lambda: calls.append("reserve") or True
     )
 
-    assert main_module.on_button_long_press_ready_threadsafe() is False
+    assert main_module.handle_button_hold() == "hold_ready"
     assert calls == ["reserve", ("feed", 12)]
 
 
@@ -199,7 +173,7 @@ def test_try_begin_print_job_clears_stale_hold_reservation(monkeypatch):
     hardware_module.clear_print_reservation()
 
 
-def test_on_factory_reset_threadsafe_promotes_hold_reservation(monkeypatch):
+def test_long_hold_promotes_hold_reservation_to_factory_reset(monkeypatch):
     captured = {}
 
     class DummyLoop:
@@ -217,7 +191,7 @@ def test_on_factory_reset_threadsafe_promotes_hold_reservation(monkeypatch):
     monkeypatch.setattr(hardware_module, "hold_action_started_at", time.time())
     monkeypatch.setattr(main_module.asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe)
 
-    main_module.on_factory_reset_threadsafe()
+    assert main_module.handle_button_long_hold() == "factory_reset"
 
     assert hardware_module.print_in_progress is True
     assert hardware_module.hold_action_in_progress is False
@@ -228,7 +202,7 @@ def test_on_factory_reset_threadsafe_promotes_hold_reservation(monkeypatch):
     hardware_module.clear_print_reservation()
 
 
-def test_long_press_menu_trigger_drains_pending_button_events_before_unlock(monkeypatch):
+def test_long_press_menu_trigger_arms_selection_before_unlock(monkeypatch):
     order = []
 
     class FakePrinter:
@@ -238,10 +212,6 @@ def test_long_press_menu_trigger_drains_pending_button_events_before_unlock(monk
     class FakeDial:
         def read_position(self):
             return 5
-
-    class FakeButton:
-        def drain_pending_events(self):
-            order.append("drain")
 
     class ImmediateExecutor:
         def __enter__(self):
@@ -257,7 +227,6 @@ def test_long_press_menu_trigger_drains_pending_button_events_before_unlock(monk
 
     monkeypatch.setattr(main_module, "printer", FakePrinter())
     monkeypatch.setattr(main_module, "dial", FakeDial())
-    monkeypatch.setattr(main_module, "button", FakeButton())
     monkeypatch.setattr(main_module, "_print_long_press_menu", lambda pos: order.append(f"print_menu_{pos}"))
     monkeypatch.setattr(
         main_module,
@@ -286,7 +255,6 @@ def test_long_press_menu_trigger_drains_pending_button_events_before_unlock(monk
         "exit_selection_mode",
         "run_in_executor",
         "print_menu_5",
-        "drain",
         "enter_selection_mode_quick-actions-5",
         "clear_reservation_False",
     ]
@@ -466,22 +434,15 @@ def test_calendar_day_view_uses_configured_local_today_label(monkeypatch):
     assert lines[0] == "TODAY (05/12)"
 
 
-def test_printer_driver_handles_serial_init_failure(monkeypatch):
-    import serial
+def test_usb_output_handles_serial_open_failure():
+    from app.drivers.usb_serial_output import UsbSerialOutput
 
-    monkeypatch.setattr(
-        PrinterDriver,
-        "_load_font_family",
-        lambda self: {"regular": None, "bold": None},
-    )
-    monkeypatch.setattr(
-        serial,
-        "Serial",
-        lambda *args, **kwargs: (_ for _ in ()).throw(serial.SerialException("no port")),
-    )
+    def refuse(port, baudrate):
+        raise OSError("no port")
 
-    driver = PrinterDriver(port="COM99")
-    assert driver.ser is None
+    output = UsbSerialOutput(port="COM99", serial_factory=refuse)
+    assert output.ser is None
+    assert output.is_available() is False
 
 
 def test_fetch_emails_sets_auth_failed_on_imap_auth_error(monkeypatch):
@@ -896,13 +857,6 @@ def test_adventure_ignores_invalid_choice_without_printing(monkeypatch, tmp_path
 
     selection_mode.exit_selection_mode()
 
-    class FakeButton:
-        def __init__(self):
-            self.drains = 0
-
-        def drain_pending_events(self):
-            self.drains += 1
-
     class FakePrinter:
         def __init__(self):
             self.bodies = []
@@ -931,10 +885,8 @@ def test_adventure_ignores_invalid_choice_without_printing(monkeypatch, tmp_path
         def flush_buffer(self):
             return None
 
-    fake_button = FakeButton()
     fake_printer = FakePrinter()
 
-    monkeypatch.setattr(hardware, "button", fake_button)
     monkeypatch.setattr(hardware, "printer", fake_printer)
     monkeypatch.setattr(
         adventure,
@@ -951,7 +903,6 @@ def test_adventure_ignores_invalid_choice_without_printing(monkeypatch, tmp_path
 
     assert selection_mode.is_selection_mode_active() is True
     assert selection_mode.get_current_module_id() == "adventure-one"
-    assert fake_button.drains == 1
     printed_before_invalid = list(fake_printer.bodies)
 
     assert selection_mode.can_handle_selection(7) is False
@@ -959,7 +910,6 @@ def test_adventure_ignores_invalid_choice_without_printing(monkeypatch, tmp_path
 
     assert selection_mode.is_selection_mode_active() is True
     assert selection_mode.get_current_module_id() == "adventure-one"
-    assert fake_button.drains == 1
     assert fake_printer.bodies == printed_before_invalid
 
     selection_mode.exit_selection_mode()
@@ -989,10 +939,6 @@ def test_quick_actions_ignores_invalid_selection_without_printing(monkeypatch):
         def read_position(self):
             return 5
 
-    class FakeButton:
-        def drain_pending_events(self):
-            order.append("drain")
-
     class ImmediateExecutor:
         def __enter__(self):
             return self
@@ -1013,7 +959,6 @@ def test_quick_actions_ignores_invalid_selection_without_printing(monkeypatch):
 
     monkeypatch.setattr(main_module, "printer", FakePrinter())
     monkeypatch.setattr(main_module, "dial", FakeDial())
-    monkeypatch.setattr(main_module, "button", FakeButton())
     monkeypatch.setattr(main_module, "_print_long_press_menu", lambda pos: order.append(f"print_menu_{pos}"))
     monkeypatch.setattr(
         main_module,

@@ -33,7 +33,8 @@ from app.config import (
     CalendarConfig,
 )
 from app.module_registry import get_all_modules, get_module
-from app.drivers.printer_serial import PrinterDriver as SerialPrinterDriver
+from app.drivers.print_outputs import PrintOutput
+from app.drivers.printer_raster import RasterPrinter
 from app.modules import webhook, text, calendar, email_client
 
 SNAPSHOT_HISTORY_DATE = "1969-07-20"
@@ -163,34 +164,28 @@ SNAPSHOT_NOTE_DOC = {
         },
     ],
 }
-class CapturePrinter(SerialPrinterDriver):
-    """Serial printer driver that captures raster bitmaps instead of sending."""
+class CaptureOutput(PrintOutput):
+    """Print output that keeps each rendered receipt instead of sending it."""
+
+    mode = "capture"
+
+    def __init__(self):
+        self.bitmaps = []
+
+    def print_receipt(self, img, *, feed_lines_after, cancel_event):
+        self.bitmaps.append(img.copy())
+        return {"cancelled": False, "width": img.width, "height": img.height}
+
+
+class CapturePrinter(RasterPrinter):
+    """The production renderer with a capturing output (same layout as printed)."""
 
     def __init__(self, width: int = PRINTER_WIDTH):
-        # Skip serial initialization entirely in offline render mode.
-        super().__init__(width=width, init_serial=False)
-        self.captured_bitmaps = []
+        super().__init__(width=width, output=CaptureOutput())
 
-    def _send_bitmap(self, img):  # type: ignore[override]
-        if img is not None:
-            self.captured_bitmaps.append(img.copy())
-        # flush_buffer() reads transport stats from the real driver's return value.
-        return {"cancelled": False}
-
-    def blip(self):
-        # Skip tactile feedback in offline render mode.
-        return
-
-    def feed_direct(self, lines: int = 3):
-        # No hardware feed in offline render mode.
-        return
-
-    def clear_hardware_buffer(self):
-        # Keep software state reset behavior only.
-        self.print_buffer.clear()
-        self.lines_printed = 0
-        self.max_lines = 0
-        self._max_lines_hit = False
+    @property
+    def captured_bitmaps(self):
+        return self.output.bitmaps
 
 
 def _build_snapshot_calendar_ics(reference_day: Optional[date] = None) -> str:

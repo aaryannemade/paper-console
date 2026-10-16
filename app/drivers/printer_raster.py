@@ -1,43 +1,33 @@
-import math
-import json
+"""Receipt renderer for the CSN-A2 / QR204 (58 mm, 384 dots).
+
+Modules call the content API (print_header, print_text, print_image, ...). Calls
+are buffered and rendered into one bitmap on flush_buffer(), which is handed to a
+print output (console, USB serial or ESP32 relay; see print_outputs.py). This class
+does no I/O itself.
+"""
+
+import functools
 import os
-import platform
-import random
 import threading
-import time
 import unicodedata
 import logging
-from datetime import datetime, date, timezone
-from pathlib import Path
 from typing import List, Optional, Any
 
-import serial
 from PIL import Image, ImageDraw, ImageFont
 import app.config
 import app.selection_mode
-
-try:
-    from app.drivers.gpio_ioctl import GpioChip, GPIOHANDLE_REQUEST_INPUT
-except Exception:  # pragma: no cover - non-Pi environments
-    GpioChip = None
-    GPIOHANDLE_REQUEST_INPUT = 0
+from app.drivers.print_outputs import (  # noqa: F401 - re-exported for callers
+    ConsoleOutput,
+    PrintOutput,
+    PrinterTransportError,
+    PrinterUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class PrinterTransportError(RuntimeError):
-    """Raised when a receipt cannot be transmitted completely."""
-
-    def __init__(self, message: str, *, bytes_written: int = 0):
-        super().__init__(message)
-        self.bytes_written = max(0, int(bytes_written))
-
-
-class PrinterDriver:
-    """
-    Real hardware driver for thermal receipt printer (QR204/CSN-A2).
-    Uses serial communication via GPIO pins or USB-to-serial adapters.
-    """
+class RasterPrinter:
+    """Renders receipts to a bitmap and hands them to a print output."""
 
     # Maximum buffer size to prevent memory issues (roughly 1000 lines)
     MAX_BUFFER_SIZE = 1000
@@ -81,42 +71,22 @@ class PrinterDriver:
     SPACING_SMALL = 4  # Tight spacing (after inline elements)
     SPACING_MEDIUM = 8  # Standard spacing (between content blocks)
     SPACING_LARGE = 16  # Section spacing (between modules)
-    BUSY_PIN_GPIO = 18  # Printer DTR line from the wiring table
-
-    # QR204 transport framing. Each strip is its own GS v 0 command, but the
-    # strips are transmitted continuously as one logical receipt. NUL is
-    # ignored by the printer in command mode; guard NULs can therefore replace
-    # a few missing raster payload bytes without shifting the next command.
-    RASTER_STRIP_ROWS = 24
-    RASTER_GUARD_BYTES = 4
-    SERIAL_WRITE_CHUNK_BYTES = 128
-
-    # DTR is useful when it asserts, but the deployed wiring does not make it a
-    # reliable prerequisite for progress. Wait for a stable assertion, then
-    # stop consulting it for the current receipt if it remains high too long.
-    BUSY_PIN_DEBOUNCE_SECONDS = 0.01
-    BUSY_PIN_POLL_SECONDS = 0.005
-    BUSY_PIN_WAIT_TIMEOUT = 15.0
-
-    INCIDENT_LOG_MAX_BYTES = 256 * 1024
 
     def __init__(
         self,
         width: int = 42,  # Characters per line
-        port: Optional[str] = None,
-        baudrate: int = 9600,  # QR204 only supports 9600
-        init_serial: bool = True,
+        output: Optional[PrintOutput] = None,
+        echo: Any = None,
     ):
         self.width = width
-        self.ser = None
-        self.port = port
-        self.baudrate = baudrate
-        self.last_init_error = None
+        self.output = output if output is not None else ConsoleOutput()
+        # Optional text echo (the mock printer) so console mode keeps readable
+        # [PRINT] lines in addition to the rendered receipt.
+        self.echo = echo
+        self._echo_depth = 0
+        # Serializes a job's render-and-deliver step.
         self._io_lock = threading.RLock()
-        self._incident_lock = threading.Lock()
         self._cancel_event = threading.Event()
-        self._busy_chip = None
-        self._busy_handle = None
         self.last_transport_stats = {}
         # Buffer for print operations (prints are always inverted/reversed)
         # Each item is a tuple: ('text', line) or ('feed', count) or ('qr', data).
@@ -138,101 +108,13 @@ class PrinterDriver:
         # Load font family for styled text
         self._fonts = self._load_font_family()
 
-        # Auto-detect serial port if not specified
-        if port is None:
-            if platform.system() == "Linux":
-                # Try GPIO serial first (primary interface)
-                possible_ports = [
-                    "/dev/serial0",  # GPIO serial - needs console disabled
-                    "/dev/ttyUSB0",
-                    "/dev/ttyUSB1",
-                    "/dev/ttyACM0",
-                    "/dev/ttyACM1",
-                ]
-                # Use the first one that exists
-                for p in possible_ports:
-                    if os.path.exists(p):
-                        port = p
-                        break
-                if not port:
-                    port = "/dev/serial0"  # Default for GPIO serial
-            elif platform.system() == "Windows":
-                # Windows COM ports
-                possible_ports = [f"COM{i}" for i in range(1, 10)]
-                port = possible_ports[0]
-            else:
-                possible_ports = ["/dev/tty.usbserial", "/dev/ttyUSB0"]
-                port = possible_ports[0]
-
-        self.port = port
-
-        if not init_serial:
-            return
-
-        # Initialize serial connection
-        try:
-            self.ser = serial.Serial(
-                port=port,
-                baudrate=baudrate,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=1,
-                write_timeout=5,
-            )
-
-            if self.ser.in_waiting:
-                self.ser.reset_input_buffer()
-            self.ser.reset_output_buffer()
-
-            time.sleep(0.5)
-            self._initialize_busy_pin()
-            self._initialize_printer()
-
-        except serial.SerialException as e:
-            self.ser = None
-            self.last_init_error = str(e)
-            logger.warning(
-                "Printer serial initialization failed on port %s: %s",
-                self.port,
-                e,
-            )
+    @property
+    def output_mode(self) -> str:
+        return getattr(self.output, "mode", "unknown")
 
     def is_available(self) -> bool:
-        """Return True if the serial printer is initialized and open."""
-        return bool(self.ser and self.ser.is_open)
-
-    def _initialize_busy_pin(self):
-        """Open the printer DTR/busy GPIO line if it is available on this device."""
-        if GpioChip is None or not os.path.exists("/dev/gpiochip0"):
-            return
-
-        try:
-            self._busy_chip = GpioChip("/dev/gpiochip0")
-            self._busy_handle = self._busy_chip.request_lines(
-                [self.BUSY_PIN_GPIO],
-                GPIOHANDLE_REQUEST_INPUT,
-                label="printer_busy",
-            )
-        except Exception:
-            self._busy_handle = None
-            if self._busy_chip:
-                try:
-                    self._busy_chip.close()
-                except Exception:
-                    pass
-                self._busy_chip = None
-            logger.debug("Printer busy pin initialization failed", exc_info=True)
-
-    def _read_busy_pin(self) -> Optional[int]:
-        """Return the raw GPIO level of the printer DTR/busy line, if available."""
-        if not self._busy_handle:
-            return None
-        try:
-            return int(self._busy_handle.get_values()[0])
-        except Exception:
-            logger.debug("Printer busy pin read failed", exc_info=True)
-            return None
+        """Return True if the print output can accept a receipt now."""
+        return bool(self.output.is_available())
 
     def _load_font_family(self) -> dict:
         """Load IBM Plex Mono font family with multiple weights.
@@ -1097,416 +979,27 @@ class PrinterDriver:
         except Exception:
             return None
 
-    def _incident_log_path(self) -> Path:
-        configured = os.environ.get("PC1_PRINTER_INCIDENT_LOG", "").strip()
-        if configured:
-            return Path(configured)
-        project_root = Path(__file__).resolve().parents[2]
-        return project_root / "printer-incidents.log"
-
-    def _record_transport_incident(self, event: str, **details):
-        """Persist one bounded incident record without logging normal jobs to SD."""
-        payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": event,
-            "port": self.port,
-            "baudrate": self.baudrate,
-            **details,
-        }
-        logger.error("Printer transport incident %s: %s", event, details)
-
-        try:
-            encoded = (json.dumps(payload, default=str, sort_keys=True) + "\n").encode(
-                "utf-8"
-            )
-            path = self._incident_log_path()
-            backup = path.with_name(f"{path.stem}.previous{path.suffix}")
-            with self._incident_lock:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                current_size = path.stat().st_size if path.exists() else 0
-                if current_size + len(encoded) > self.INCIDENT_LOG_MAX_BYTES:
-                    backup.unlink(missing_ok=True)
-                    path.replace(backup)
-                with path.open("ab") as incident_file:
-                    incident_file.write(encoded)
-        except Exception:
-            # Incident reporting must not replace the original printer failure.
-            logger.debug("Could not persist printer incident", exc_info=True)
-
-    def _encode_raster_strip(self, strip: Image.Image) -> bytes:
-        """Encode one independently framed GS v 0 strip plus recovery guards."""
-        strip = strip.convert("1")
-        width, height = strip.size
-        if width % 8 != 0:
-            raise ValueError("Raster strip width must be byte-aligned")
-
-        bytes_per_row = width // 8
-        header = b"\x1d\x76\x30\x00" + bytes(
-            [
-                bytes_per_row & 0xFF,
-                (bytes_per_row >> 8) & 0xFF,
-                height & 0xFF,
-                (height >> 8) & 0xFF,
-            ]
-        )
-        payload = bytes(byte ^ 0xFF for byte in strip.tobytes())
-        guards = b"\x00" * self.RASTER_GUARD_BYTES
-        return header + payload + guards
-
-    def _wait_for_busy_clear(self) -> tuple[float, bool, bool]:
-        """Advisory DTR wait returning (seconds, asserted, timed_out)."""
-        if self._read_busy_pin() != 1:
-            return 0.0, False, False
-
-        wait_started = time.monotonic()
-        time.sleep(self.BUSY_PIN_DEBOUNCE_SECONDS)
-        if self._read_busy_pin() != 1:
-            return time.monotonic() - wait_started, False, False
-
-        while self._read_busy_pin() == 1:
-            elapsed = time.monotonic() - wait_started
-            if elapsed >= self.BUSY_PIN_WAIT_TIMEOUT:
-                return elapsed, True, True
-            time.sleep(self.BUSY_PIN_POLL_SECONDS)
-
-        return time.monotonic() - wait_started, True, False
-
-    def _flush_serial(self):
-        if not self.ser or not self.ser.is_open:
-            raise PrinterTransportError("Printer serial interface is unavailable")
-        try:
-            self.ser.flush()
-        except Exception as exc:
-            raise PrinterTransportError("Printer serial flush failed") from exc
-
     def request_cancel(self) -> None:
         """Request that the active receipt stop at the next safe raster boundary."""
         self._cancel_event.set()
 
     def clear_cancel_request(self) -> None:
-        """Prepare the transport for a new logical print job."""
+        """Prepare for a new logical print job."""
         self._cancel_event.clear()
 
     def is_cancel_requested(self) -> bool:
         return self._cancel_event.is_set()
 
-    def _send_bitmap(self, img: Image.Image):
-        """Send a bitmap as guarded, consecutive raster strips.
-
-        Strips are protocol boundaries, not separate print jobs: there are no
-        feeds or printer-idle waits between them. Flushing the host UART at each
-        boundary keeps a future cancellation from leaving unsent bytes queued.
-        """
-        if img is None:
-            return {}
-
-        width, height = img.size
-        if width % 8 != 0:
-            new_width = ((width // 8) + 1) * 8
-            new_img = Image.new("1", (new_width, height), 1)
-            new_img.paste(img, (0, 0))
-            img = new_img
-            width = new_width
-        img = img.convert("1")
-
-        started = time.monotonic()
-        stats = {
-            "width": width,
-            "height": height,
-            "strips": 0,
-            "bytes_sent": 0,
-            "busy_wait_events": 0,
-            "busy_wait_seconds": 0.0,
-            "busy_pin_timed_out": False,
-            "cancelled": False,
-        }
-        consult_busy_pin = True
-        active_strip = 0
-
-        try:
-            for active_strip, top in enumerate(
-                range(0, height, self.RASTER_STRIP_ROWS), start=1
-            ):
-                # A strip is one complete GS v 0 command. Stopping here avoids
-                # leaving the printer inside a partially transmitted raster
-                # payload, which could desynchronize every command after it.
-                if self.is_cancel_requested():
-                    stats["cancelled"] = True
-                    stats["cancelled_after_strip"] = stats["strips"]
-                    break
-
-                bottom = min(top + self.RASTER_STRIP_ROWS, height)
-                command = self._encode_raster_strip(img.crop((0, top, width, bottom)))
-
-                for offset in range(0, len(command), self.SERIAL_WRITE_CHUNK_BYTES):
-                    if consult_busy_pin:
-                        waited, asserted, timed_out = self._wait_for_busy_clear()
-                        stats["busy_wait_seconds"] += waited
-                        if asserted:
-                            stats["busy_wait_events"] += 1
-                        if timed_out:
-                            stats["busy_pin_timed_out"] = True
-                            consult_busy_pin = False
-                            self._record_transport_incident(
-                                "busy_pin_timeout",
-                                strip=active_strip,
-                                waited_seconds=round(waited, 3),
-                            )
-
-                    chunk = command[offset : offset + self.SERIAL_WRITE_CHUNK_BYTES]
-                    stats["bytes_sent"] += self._write(chunk)
-
-                # This waits for the host UART only, not printer mechanical idle.
-                self._flush_serial()
-                stats["strips"] = active_strip
-
-            if self.is_cancel_requested():
-                stats["cancelled"] = True
-                stats["cancelled_after_strip"] = stats["strips"]
-
-            stats["elapsed_seconds"] = time.monotonic() - started
-            self.last_transport_stats = dict(stats)
-            if stats["cancelled"]:
-                logger.info(
-                    "Bitmap transport cancelled after strip=%d bytes=%d elapsed=%.3fs",
-                    stats["strips"],
-                    stats["bytes_sent"],
-                    stats["elapsed_seconds"],
-                )
-                return stats
-
-            logger.info(
-                "Bitmap transport complete: %dx%d strips=%d bytes=%d elapsed=%.3fs "
-                "busy_waits=%d busy_seconds=%.3f",
-                width,
-                height,
-                stats["strips"],
-                stats["bytes_sent"],
-                stats["elapsed_seconds"],
-                stats["busy_wait_events"],
-                stats["busy_wait_seconds"],
-            )
-            return stats
-        except Exception as exc:
-            if isinstance(exc, PrinterTransportError):
-                stats["bytes_sent"] += exc.bytes_written
-            stats["elapsed_seconds"] = time.monotonic() - started
-            stats["failed_strip"] = active_strip
-            stats["error"] = str(exc)
-            self.last_transport_stats = dict(stats)
-            self._record_transport_incident(
-                "bitmap_send_failed",
-                width=width,
-                height=height,
-                strip=active_strip,
-                bytes_sent=stats["bytes_sent"],
-                error=str(exc),
-            )
-            logger.exception("Bitmap transport failed at strip %d", active_strip)
-            if isinstance(exc, PrinterTransportError):
-                raise
-            raise PrinterTransportError("Bitmap transport failed") from exc
-
-    def _write(self, data: bytes) -> int:
-        """Write every byte or raise instead of silently accepting truncation."""
-        if not data:
-            return 0
-        if not self.ser or not self.ser.is_open:
-            raise PrinterTransportError("Printer serial interface is unavailable")
-
-        with self._io_lock:
-            total_written = 0
-            view = memoryview(data)
-            while total_written < len(data):
-                try:
-                    written = self.ser.write(view[total_written:])
-                except Exception as exc:
-                    raise PrinterTransportError(
-                        f"Serial write failed after {total_written}/{len(data)} bytes",
-                        bytes_written=total_written,
-                    ) from exc
-                if not written or written < 0:
-                    raise PrinterTransportError(
-                        f"Serial write made no progress at {total_written}/{len(data)} bytes",
-                        bytes_written=total_written,
-                    )
-                total_written += int(written)
-            return total_written
-
-    def _read(self, size: int = 1, timeout: float = 1.0) -> bytes:
-        """Read bytes from serial interface. Returns empty bytes on error."""
-        try:
-            if self.ser and self.ser.is_open:
-                old_timeout = self.ser.timeout
-                self.ser.timeout = timeout
-                data = self.ser.read(size)
-                self.ser.timeout = old_timeout
-                return data
-        except Exception:
-            pass
-        return b""
-
-    def is_printer_busy(self) -> bool:
-        """Check if printer is currently busy/printing using DLE EOT 1.
-
-        Returns:
-            True if printer is busy (offline), False if ready (online)
-            Returns False on error (assume ready to allow printing)
-        """
-        try:
-            # Send DLE EOT 1 - Real-time printer status
-            self._write(b"\x10\x04\x01")  # DLE EOT 1
-
-            # Read response (1 byte)
-            response = self._read(1, timeout=0.5)
-
-            if len(response) == 0:
-                return False  # No response, assume ready
-
-            status_byte = response[0]
-
-            # Bit 3: 0 = Online (ready), 1 = Offline (busy/printing)
-            is_offline = (status_byte & 0x08) != 0
-
-            return is_offline
-
-        except Exception:
-            return False  # On error, assume ready
-
-    def wait_for_idle(self, timeout: float = 3.0, quiet_period: float = 0.35):
-        """Wait briefly for the printer to finish any trailing mechanical activity.
-
-        This is intentionally conservative: we first let the transport settle,
-        then poll real-time status when available. If the printer never answers
-        status queries, we still keep a short quiet-period delay so back-to-back
-        jobs do not overlap at the paper/feed stage.
-        """
-        if not self.ser or not self.ser.is_open:
-            return
-
-        deadline = time.time() + max(timeout, quiet_period)
-        busy_pin_seen = False
-        busy_seen = False
-
-        # Give the printer firmware a moment after serial flush/feed commands.
-        time.sleep(min(0.15, quiet_period))
-
-        busy_pin_level = self._read_busy_pin()
-        if busy_pin_level is not None:
-            while time.time() < deadline:
-                busy_pin_level = self._read_busy_pin()
-                if busy_pin_level == 1:
-                    busy_pin_seen = True
-                    time.sleep(0.05)
-                    continue
-                if busy_pin_seen:
-                    time.sleep(quiet_period)
-                    return
-                remaining = deadline - time.time()
-                if remaining > 0:
-                    time.sleep(min(quiet_period, remaining))
-                return
-
-        while time.time() < deadline:
-            busy = self.is_printer_busy()
-            if busy:
-                busy_seen = True
-                time.sleep(0.1)
-                continue
-            if busy_seen:
-                time.sleep(quiet_period)
-            else:
-                remaining = deadline - time.time()
-                if remaining > 0:
-                    time.sleep(min(quiet_period, remaining))
-            return
-
-    def close(self):
-        if self._busy_handle:
-            try:
-                self._busy_handle.close()
-            except Exception:
-                pass
-            self._busy_handle = None
-        if self._busy_chip:
-            try:
-                self._busy_chip.close()
-            except Exception:
-                pass
-            self._busy_chip = None
-        if self.ser and self.ser.is_open:
-            try:
-                self.ser.close()
-            except Exception:
-                pass
-            self.ser = None
-
     def clear_hardware_buffer(self):
-        """Clear the printer's hardware buffer - call at startup to prevent garbage."""
-        import time
-
+        """Drop buffered content and reset the printer (server startup)."""
+        with self._io_lock:
+            self.print_buffer.clear()
+            self.lines_printed = 0
+            self.max_lines = 0
         try:
-            with self._io_lock:
-                # Clear software buffer
-                self.print_buffer.clear()
-                self.lines_printed = 0
-                self.max_lines = 0
-
-                # Cancel any in-progress print job
-                self._write(b"\x18")  # CAN - Cancel print data in page mode
-                time.sleep(0.05)
-
-                # ESC @ - Hardware reset (clears all settings and buffer)
-                self._write(b"\x1b\x40")
-                time.sleep(0.3)
-
-                # Re-apply ASCII mode settings after reset
-                self._apply_ascii_settings()
+            self.output.reset()
         except Exception:
-            pass
-
-    def _apply_ascii_settings(self):
-        """Apply ASCII-only mode settings for bitmap rendering."""
-        try:
-            # Cancel Chinese character mode (confirmed in QR204 manual)
-            self._write(b"\x1c\x2e")  # FS . (1C 2E) - Cancel Chinese mode
-
-            # Select USA character set (confirmed in QR204 manual)
-            self._write(b"\x1b\x52\x00")  # ESC R 0 (1B 52 00) - USA character set
-
-            # Select code page PC437 (confirmed in QR204 manual)
-            self._write(b"\x1b\x74\x00")  # ESC t 0 (1B 74 00) - Code page PC437 (US)
-
-            # Note: No ESC { rotation needed - we rotate bitmaps in software
-        except Exception:
-            pass
-
-    def _initialize_printer(self):
-        """Send initialization commands to ensure ASCII-only mode."""
-        import time
-
-        try:
-            # Clear any garbage in the printer buffer
-            self._write(b"\x00\x00\x00\x00\x00")
-            time.sleep(0.1)
-
-            # ESC @ - Hardware reset (clears all settings)
-            self._write(b"\x1b\x40")
-            time.sleep(0.3)
-
-            # Apply ASCII settings
-            self._apply_ascii_settings()
-        except Exception:
-            pass
-
-    def _ensure_ascii_mode(self):
-        """Re-send commands to ensure printer stays in ASCII mode."""
-        try:
-            # Cancel Chinese mode (confirmed in QR204 manual)
-            self._write(b"\x1c\x2e")  # FS . (1C 2E)
-            # Note: No rotation command needed - bitmaps are pre-rotated
-        except Exception:
-            pass
+            logger.debug("Printer reset failed", exc_info=True)
 
     def _sanitize_text(self, text: str) -> str:
         """
@@ -1742,10 +1235,10 @@ class PrinterDriver:
         self.print_buffer.append(("feed", lines))
 
     def flush_buffer(self):
-        """Flush the print buffer as ONE unified bitmap for speed.
+        """Render the buffered content as ONE bitmap and deliver it.
 
-        All text, feeds, and QR codes are rendered into a single tall image,
-        rotated 180°, and sent as one raster graphics command.
+        The bitmap is rotated 180° (the printer feeds upside down) and handed to
+        the print output together with the cutter feed.
         """
         with self._io_lock:
             if not self.print_buffer:
@@ -1753,7 +1246,6 @@ class PrinterDriver:
                 return
 
             logger.debug("Flushing buffer with %d ops...", len(self.print_buffer))
-
 
             # If max_lines is set, trim content from END of buffer
             total_lines_in_buffer = 0
@@ -1788,31 +1280,35 @@ class PrinterDriver:
             self.print_buffer.clear()
 
             img = self._render_unified_bitmap(ops)
-            if img:
-                logger.debug("Rendered unified bitmap: %s", img.size)
-                transport_stats = self._send_bitmap(img)
-                if transport_stats.get("cancelled") or self.is_cancel_requested():
-                    logger.info("Skipping post-print feed after receipt cancellation")
-                    return
-                # Ensure all data is transmitted before returning
-                if self.ser and self.ser.is_open:
-                    try:
-                        self.ser.flush()
-                    except Exception:
-                        logger.exception("Serial flush failed")
-                # Explicit post-print feed for cutter clearance.
-                # Use feed_direct() because it sends both ESC d and ESC J variants
-                # for better compatibility across printer firmwares.
-                feed_lines = max(0, int(self.cutter_feed_dots / 24))
-                if feed_lines > 0:
-                    try:
-                        self.feed_direct(feed_lines)
-                    except Exception:
-                        logger.exception("Post-print feed failed")
-                self.wait_for_idle()
-            else:
+            if not img:
                 logger.debug("No bitmap rendered from ops.")
+                return
+            logger.debug("Rendered unified bitmap: %s", img.size)
+            try:
+                transport_stats = self._send_bitmap(img) or {}
+            except PrinterTransportError as exc:
+                # Offline/failed delivery is an expected condition (skip and log,
+                # no queue); it must not crash the job that produced the receipt.
+                self.last_transport_stats = {"error": str(exc), "cancelled": False}
+                logger.warning(
+                    "Receipt not printed (%s output, %dx%d): %s",
+                    self.output_mode,
+                    img.width,
+                    img.height,
+                    exc,
+                )
+                return
+            if transport_stats.get("cancelled") or self.is_cancel_requested():
+                logger.info("Receipt cancelled before completion")
 
+    def _send_bitmap(self, img: Image.Image) -> dict:
+        """Deliver one rendered receipt (and its cutter feed) through the output."""
+        feed_lines = max(0, int(self.cutter_feed_dots / 24))
+        stats = self.output.print_receipt(
+            img, feed_lines_after=feed_lines, cancel_event=self._cancel_event
+        )
+        self.last_transport_stats = dict(stats or {})
+        return self.last_transport_stats
 
     def reset_buffer(self, max_lines: int = 0):
         """Reset/clear the print buffer (call at start of new print job).
@@ -1825,8 +1321,6 @@ class PrinterDriver:
         self.lines_printed = 0
         self.max_lines = max_lines
         self._max_lines_hit = False
-        # Re-assert ASCII mode and rotation at start of each print job
-        self._ensure_ascii_mode()
 
     def set_cutter_feed(self, lines: int):
         """Set the cutter feed space (lines of white space at end of print).
@@ -1836,59 +1330,22 @@ class PrinterDriver:
         self.cutter_feed_dots = lines * 24  # 24 dots per line at 203 DPI
 
     def feed_direct(self, lines: int = 3):
-        """Feed paper directly, bypassing the buffer (for use after flushing in invert mode).
-
-        After bitmap printing (GS v 0), we need to ensure paper feeds.
-        Uses ESC d (Print and feed n lines) which should work after any print command.
-        """
-        if lines <= 0:
-            return
-
-        try:
-            # Small delay to let bitmap finish processing
-            time.sleep(0.05)
-
-            # ESC d n - Print and feed n lines (0x1B 0x64 n)
-            # This command works after bitmap printing because it's a "print and feed" command
-            # Even with no data to print, it should still feed the paper
-            feed_amount = min(lines, 255)
-            self._write(b"\x1b\x64" + bytes([feed_amount]))
-
-            # Backup: Also send ESC J (feed by dots) in case ESC d doesn't work
-            dots = lines * 24
-            while dots > 0:
-                chunk = min(dots, 255)
-                self._write(b"\x1b\x4a" + bytes([chunk]))
-                dots -= chunk
-
-            # Flush to ensure all data is sent
-            if self.ser and self.ser.is_open:
-                self.ser.flush()
-        except Exception:
-            pass
+        """Feed paper immediately, bypassing the receipt buffer."""
+        if lines > 0:
+            self.feed_dots(lines * 24)
 
     def feed_dots(self, dots: int = 12):
-        """Feed paper by raw dot count (12 dots ~= half line)."""
+        """Feed paper immediately by raw dot count (12 dots ~= half line)."""
         if dots <= 0:
             return
-        remaining = int(dots)
         try:
-            while remaining > 0:
-                chunk = min(remaining, 255)
-                self._write(b"\x1b\x4a" + bytes([chunk]))  # ESC J n
-                remaining -= chunk
-            if self.ser and self.ser.is_open:
-                self.ser.flush()
+            self.output.feed(int(dots))
         except Exception:
-            pass
+            logger.debug("Direct feed failed", exc_info=True)
 
     def blip(self):
         """Short paper feed for tactile feedback."""
-        try:
-            # ESC J n - Feed paper n dots (n/203 inches, ~24 dots = 1 line)
-            self._write(b"\x1b\x4a\x02")
-        except Exception:
-            pass
+        self.feed_dots(2)
 
     def print_qr(
         self,
@@ -1924,6 +1381,51 @@ class PrinterDriver:
 
 
     def close(self):
-        """Close the serial connection."""
-        if self.ser and self.ser.is_open:
-            self.ser.close()
+        """Release the print output."""
+        try:
+            self.output.close()
+        except Exception:
+            logger.debug("Closing print output failed", exc_info=True)
+
+
+# Content calls echoed to the optional text printer (console mode).
+ECHOED_METHODS = (
+    "print_text",
+    "print_header",
+    "print_subheader",
+    "print_body",
+    "print_caption",
+    "print_bold",
+    "print_line",
+    "print_article_block",
+    "print_thick_line",
+    "print_icon",
+    "print_image",
+    "print_qr",
+    "feed",
+)
+
+
+def _with_echo(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        # Echo only the outermost call (print_body calls print_text, etc.).
+        if self.echo is not None and self._echo_depth == 0:
+            echo_method = getattr(self.echo, method.__name__, None)
+            if echo_method is not None:
+                try:
+                    echo_method(*args, **kwargs)
+                except Exception:
+                    logger.debug("Print echo failed", exc_info=True)
+        self._echo_depth += 1
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._echo_depth -= 1
+
+    return wrapper
+
+
+for _name in ECHOED_METHODS:
+    setattr(RasterPrinter, _name, _with_echo(getattr(RasterPrinter, _name)))
+del _name

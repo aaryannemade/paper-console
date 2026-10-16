@@ -1,7 +1,7 @@
 # Container + ESP32-S3 migration plan
 
-Status: architecture confirmed; Steps 1 and 2 implemented. Steps 3–5 remain
-pending. ESP32 transport and firmware are not implemented yet. Printer UART
+Status: architecture confirmed; Steps 1–3 (container side) implemented. Next:
+Step 4 (container packaging). ESP32 firmware is Step 6. Printer UART
 details for the firmware are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
@@ -104,30 +104,52 @@ Acceptance: application lifecycle and supported APIs do not call privileged host
 tools; login/logout, settings persistence/reset, timezone formatting and scheduling
 have focused regression coverage.
 
-## Step 3 — Replace local hardware with an HTTP-controlled print service
+## Step 3 — Replace local hardware with an HTTP-controlled print service (container side)
 
-- Keep the existing authenticated `POST /action/print-channel/{position}` as the
-  initial trigger API. It already accepts a channel directly, reserves the printer,
-  and returns while work runs in the background.
-- Extract print orchestration/reservation from GPIO-oriented `app/hardware.py`.
-- Remove Pi detection, GPIO drivers and button callbacks. (The UART boot migration
-  was already removed in Step 2.)
-- Replace shared dial state with explicit request inputs. Define HTTP interaction
-  events for Adventure and other selection modes before removing their controls.
-- Extract rendering from `printer_serial.py`; preserve mock/capture outputs and
-  the full-receipt snapshot workflow.
-- Implement the agreed transport/job protocol, including how status, cancellation,
-  concurrency and authentication work for the ESP32.
-- Add ESP32-S3 firmware with captive portal, persistent WiFi/container configuration,
-  local link-status UI, physical input events, HTTP print receiver and CSN-A2 UART
-  relay. Keep application decisions in the container and test scheduled pushes as
-  well as input-triggered pushes. Confirm board pin assignments when wiring firmware.
-  Follow [printer-uart-reference.md](printer-uart-reference.md) for serial settings,
-  raster strip framing, DTR handling and throughput/buffer sizing.
+Container-only. The ESP32 firmware is Step 6; until then the container side is
+exercised with mock outputs, a USB printer on the development machine, and a device
+simulator that implements the firmware's half of the protocol.
+
+Decisions:
+
+- Print output is selected with `PC1_PRINTER_OUTPUT`: `esp32` (default; production),
+  `console` (development log, the `just backend` default) or `usb` (development only:
+  a CSN-A2 on a USB-serial adapter, port from `PC1_PRINTER_PORT` or auto-detected).
+  All three share the same renderer, so layout and length behave identically.
+- The container generates the CSN-A2 bytes (raster strips, feeds). The ESP32 only
+  relays and paces them over UART, as the architecture section states.
+- The ESP32 reports an absolute channel position 1–8 and button gestures. How the
+  physical control (a rotary encoder with push switch) produces these is a firmware
+  concern (Step 6).
+- Offline or busy ESP32: the print is skipped and logged, with an error to the
+  caller. No queue and no replay on reconnect.
+- One device, authenticated in both directions with a shared bearer token
+  (`PC1_RELAY_TOKEN`), separate from the settings password.
+
+Increments:
+
+- **3a — Split rendering from output (implemented).** Move the renderer out of the serial driver
+  into a transport-free raster printer; move CSN-A2 byte encoding into a pure
+  module; add `console`, `usb` and `esp32` outputs (`esp32` reports unavailable
+  until 3c). Remove Raspberry Pi detection, the GPIO busy pin and `/dev/serial0`
+  handling. Console mode keeps the `[PRINT]` log and can save each receipt as PNG
+  (`PC1_PRINT_CAPTURE_DIR`). Keep the full-print snapshot workflow working.
+- **3b — HTTP input events (implemented).** Add an authenticated input-event endpoint (position
+  and button gestures, event IDs, duplicate rejection) that drives the existing
+  channel print, quick actions, cancel, factory reset, Adventure and app-picker
+  selection. Keep the current dial position server-side. Then remove the GPIO
+  button/dial drivers, ioctl helper and their callbacks.
+- **3c — ESP32 relay transport (implemented).** Write `docs/relay-protocol.md`: registration and
+  heartbeat, job push with job IDs and bounded chunks, job status callbacks, cancel,
+  busy/offline/error responses, heartbeat expiry and restart reconciliation.
+  Implement the `esp32` output and the device endpoints, show link status in the
+  settings UI, and add `testing/relay_simulator.py`, which decodes received jobs back
+  to PNG. Test scheduled and input-triggered prints end to end against the simulator.
 
 Acceptance: HTTP triggers work without local hardware; concurrent requests and
-retries have defined behavior; full receipt snapshots preserve layout; physical
-completion/failure is tested against the chosen transport.
+retries have defined behavior; full receipt snapshots preserve layout; console and
+USB outputs work in development; the simulator passes the protocol tests that the
+firmware will have to pass in Step 6.
 
 ## Step 4 — Container packaging and persistence
 
@@ -155,6 +177,21 @@ shutdown; smoke test a mock print via HTTP from outside the container.
 - Add CI checks for backend tests, frontend build and container smoke tests.
 - Verify no remaining runtime paths rely on Pi files, GPIO, `nmcli`, `sudo`,
   `systemctl`, `raspi-config`, `chpasswd` or host filesystem mutation.
+
+## Step 6 — ESP32-S3 firmware
+
+- Implement `docs/relay-protocol.md` on the ESP32-S3: captive portal, persistent
+  WiFi/container URL/token configuration, local link-status UI, heartbeat, input
+  events, HTTP print receiver and CSN-A2 UART relay.
+- Map the rotary encoder with push switch to the protocol's position and button
+  gestures. Confirm board pin assignments when wiring.
+- Follow [printer-uart-reference.md](printer-uart-reference.md) for serial
+  settings, raster strip framing, DTR handling and throughput/buffer sizing.
+- Keep the HTTP server responsive during UART transfer.
+
+Acceptance: the firmware passes the same protocol tests as the Step 3c simulator;
+physical completion/failure and scheduled and input-triggered prints are tested on
+hardware.
 
 Step 1a verification: 313 backend tests pass, including startup/shutdown checks for
 both first and subsequent boots, authentication independent of AP state, and task
@@ -198,4 +235,83 @@ Left for later steps: GPIO drivers and Pi detection in `app/hardware.py`
 scripts and workflow (Step 5). `GET /api/system/timezone` and the location default
 still try read-only `timedatectl show`, which falls back cleanly in a container.
 
-Next implementation: Step 3 (HTTP relay protocol and ESP32-S3 firmware).
+Step 3a result: `app/drivers/printer_serial.py` became `printer_raster.py`
+(`RasterPrinter`), a renderer with no I/O that hands one bitmap per receipt to a
+print output. CSN-A2 encoding (GS v 0 strips with guard bytes, feeds, init) lives in
+`app/drivers/escpos.py`. Outputs: `console` (the `[PRINT]` echo from the mock
+printer plus a `[RECEIPT]` line, optional PNG capture), `usb` (pyserial, 128-byte
+writes, per-strip flush, cancel between strips, reconnect after unplug) and `esp32`
+(reports unavailable until 3c). `PC1_PRINTER_OUTPUT` defaults to `esp32`; `just
+backend` and the tests use `console`. Removed: Raspberry Pi detection, GPIO busy pin,
+`/dev/serial0` probing and the SD-card incident log. GPIO button/dial drivers are no
+longer selected (mocks only) and are deleted in 3b.
+
+Offline policy: `try_begin_print_job` skips and logs when the output is
+unavailable, so scheduled, email, Slack and webhook prints are dropped without
+reserving the printer; print endpoints return 503 with the output name. Printer
+availability is reported in `/api/health` (`printer`, `printer_output`) but does
+not degrade server health.
+
+Verification: 299 backend tests (USB strip framing, chunking, cancellation,
+partial-write and failure handling, reconnect; output selection; console echo,
+byte count and PNG capture; offline 503/skip/health). The full print gallery
+rendered by the old serial driver and by the new renderer with the same random
+seed is pixel-identical for every deterministic receipt (37/41; the rest are
+live system-monitor values and a wordsearch whose order depends on Python's hash
+seed). Live: `just backend` console print through the Vite proxy, plus `esp32`
+and `usb` modes with no device (503, health stays healthy) and an invalid mode
+(startup fails).
+
+Known issue (pre-existing, unchanged): `max_print_lines` only counts legacy
+`text` ops, and content uses `styled` ops, so the length limit rarely applies.
+Console mode now matches the real printer here; the old mock counted every call.
+
+Step 3b result: `POST /api/device/events` (`app/device_input.py`) accepts
+`position` (absolute 1–8) and `button` gesture events (`press`, `hold`,
+`hold_release`, `long_hold`, grouped by `press_id`), authenticated with the shared
+bearer token from `PC1_RELAY_TOKEN`/`PC1_RELAY_TOKEN_FILE` (`app/relay_auth.py`;
+unset disables the endpoint with 503, invalid fails startup). Gesture timing is a
+firmware job; the container keeps the meaning: print channel, menu choice,
+cancel-by-hold (which consumes the rest of that press), Quick Actions and
+application reset. Retries with the same `event_id` return the original result
+without acting again (last 256 ids). Busy/unavailable are reported as results;
+nothing is queued. The channel position is server-side state (`ChannelSelector`).
+Removed: GPIO button/dial drivers, the ioctl helper, the mock button/dial and
+button-event draining (events that arrive during a print are rejected as busy
+instead of queued). Spec for the firmware: [relay-protocol.md](relay-protocol.md).
+Dev helper: `just device ...` (`testing/device_event.py`).
+
+Verification: 319 backend tests (token handling, event validation, dedupe,
+consumed presses, gesture outcomes against the real handlers, unavailable
+printer, health). Live: channel print, debounce, Quick Actions menu then a menu
+choice, duplicate event, 401/422/503 responses, startup failure on a short token,
+and events through the Vite proxy.
+
+Step 3c result: `docs/relay-protocol.md` specifies the full protocol. The ESP32
+posts heartbeats (`/api/device/heartbeat`: identity, boot id, callback URL,
+printer state, limits) and job status (`/api/device/jobs/{id}/status`); link state
+(`app/relay_link.py`) comes from heartbeats and push results and is shown in
+General Settings (`GET /api/printer/link`) and `/api/health`. The `esp32` output
+(`app/drivers/esp32_relay_output.py`) pushes each receipt as records (preamble,
+one per raster strip, cutter feed) in device-sized chunks. It uses idempotent job
+creation and chunks, handles 429 back-off and cancellation between records, and
+waits for the final state through status callbacks with polling as a fallback. A
+device reboot or timeout fails the job without replay. Tactile feeds are small
+jobs that are not followed to completion. `PC1_RELAY_URL` optionally pins the
+device address. Delivery failures are logged by the renderer instead of crashing
+the print job. `testing/relay_simulator.py` (`just relay-sim`) is the reference
+device: it writes records at the simulated baud rate, decodes the raster back to
+PNG and reports status.
+
+Verification: 350 backend tests, including 30 relay tests with real HTTP in
+both directions: byte-exact round trip, small chunks with a full buffer,
+cancel between records, lost callbacks covered by polling, reboot mid-job
+without replay, unreachable and recovered, busy, token mismatch, feeds,
+idempotent create/chunks, and scheduled and button-triggered channel prints
+through the simulator. Live at 9600 baud: a button press printed Sudoku in 26.2 s
+(decoded PNG identical in layout) with `busy` for a second press; a UI print was
+cancelled by hold after 6 strips; an every-minute schedule printed through the
+relay; the device going away gave one logged failure and then 503, and it
+recovered on the next heartbeat.
+
+Next implementation: Step 4 (container packaging and persistence).

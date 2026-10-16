@@ -1,10 +1,14 @@
-import json
+"""USB serial output: strip framing, cancellation and write integrity."""
+
 import threading
 
 import pytest
 from PIL import Image
 
-from app.drivers.printer_serial import PrinterDriver, PrinterTransportError
+from app.drivers import escpos
+from app.drivers.print_outputs import PrinterTransportError, PrinterUnavailableError
+from app.drivers.printer_raster import RasterPrinter
+from app.drivers.usb_serial_output import UsbSerialOutput
 
 
 class _FakeSerial:
@@ -16,6 +20,8 @@ class _FakeSerial:
         self.written = bytearray()
         self.write_calls = 0
         self.flush_calls = 0
+        self.timeout = 1
+        self.in_waiting = 0
 
     def write(self, data):
         self.write_calls += 1
@@ -36,126 +42,172 @@ class _FakeSerial:
     def flush(self):
         self.flush_calls += 1
 
+    def read(self, size=1):
+        return b""
 
-class _FakeBusyHandle:
-    def __init__(self, values):
-        self.values = list(values)
-        self.index = 0
+    def reset_output_buffer(self):
+        pass
 
-    def get_values(self):
-        value = self.values[min(self.index, len(self.values) - 1)]
-        self.index += 1
-        return [value]
+    def close(self):
+        self.is_open = False
+
+
+def _make_output(fake_serial):
+    output = UsbSerialOutput(port="/dev/fake-printer", open_now=False)
+    output.ser = fake_serial
+    output.wait_for_idle = lambda: None
+    return output
 
 
 def _make_driver(fake_serial):
-    driver = PrinterDriver.__new__(PrinterDriver)
-    driver.ser = fake_serial
-    driver.port = "/dev/fake-printer"
-    driver.baudrate = 9600
-    driver._io_lock = threading.RLock()
-    driver._incident_lock = threading.Lock()
-    driver._cancel_event = threading.Event()
-    driver._busy_chip = None
-    driver._busy_handle = None
-    driver.last_transport_stats = {}
-    return driver
+    """A raster printer writing to a fake USB serial port."""
+    return RasterPrinter(output=_make_output(fake_serial))
 
 
-def test_send_bitmap_cancels_only_between_complete_raster_strips():
-    fake_serial = _FakeSerial()
-    driver = _make_driver(fake_serial)
-    original_flush = fake_serial.flush
+STRIP_BYTES = 8 + 48 * 24 + escpos.RASTER_GUARD_BYTES
+
+
+def test_cancel_stops_only_between_complete_raster_strips():
+    fake = _FakeSerial()
+    output = _make_output(fake)
+    cancel = threading.Event()
+    original_flush = fake.flush
 
     def cancel_after_first_strip():
         original_flush()
-        if fake_serial.flush_calls == 1:
-            driver.request_cancel()
+        if fake.flush_calls == 1:
+            cancel.set()
 
-    fake_serial.flush = cancel_after_first_strip
+    fake.flush = cancel_after_first_strip
 
-    stats = driver._send_bitmap(Image.new("1", (384, 72), 0))
+    stats = output.print_receipt(
+        Image.new("1", (384, 72), 0), feed_lines_after=3, cancel_event=cancel
+    )
 
-    first_strip_size = 8 + (48 * 24) + driver.RASTER_GUARD_BYTES
-    assert len(fake_serial.written) == first_strip_size
+    assert bytes(fake.written) == escpos.JOB_PREAMBLE + fake.written[2:]
+    assert len(fake.written) == len(escpos.JOB_PREAMBLE) + STRIP_BYTES
     assert stats["cancelled"] is True
     assert stats["strips"] == 1
     assert stats["cancelled_after_strip"] == 1
-    assert driver.last_transport_stats == stats
+    # A cancelled receipt gets no cutter feed.
+    assert b"\x1b\x64" not in fake.written
 
 
-def test_send_bitmap_uses_guarded_24_row_strips():
-    fake_serial = _FakeSerial()
-    driver = _make_driver(fake_serial)
-    image = Image.new("1", (384, 50), 1)
+def test_receipt_uses_guarded_24_row_strips_then_cutter_feed():
+    fake = _FakeSerial()
+    output = _make_output(fake)
 
-    stats = driver._send_bitmap(image)
+    stats = output.print_receipt(
+        Image.new("1", (384, 50), 1), feed_lines_after=2, cancel_event=threading.Event()
+    )
 
-    expected_heights = [24, 24, 2]
-    cursor = 0
-    for height in expected_heights:
+    written = bytes(fake.written)
+    cursor = len(escpos.JOB_PREAMBLE)
+    assert written[:cursor] == escpos.JOB_PREAMBLE
+    for height in (24, 24, 2):
         payload_size = 48 * height
-        assert fake_serial.written[cursor : cursor + 8] == (
-            b"\x1d\x76\x30\x00" + bytes((48, 0, height, 0))
-        )
+        assert written[cursor : cursor + 8] == b"\x1d\x76\x30\x00" + bytes((48, 0, height, 0))
         cursor += 8
-        assert fake_serial.written[cursor : cursor + payload_size] == b"\x00" * payload_size
+        assert written[cursor : cursor + payload_size] == b"\x00" * payload_size
         cursor += payload_size
-        assert fake_serial.written[cursor : cursor + 4] == b"\x00" * 4
+        assert written[cursor : cursor + 4] == b"\x00" * 4
         cursor += 4
 
-    assert cursor == len(fake_serial.written)
-    assert fake_serial.flush_calls == 3
+    assert written[cursor:] == escpos.feed_lines(2)
     assert stats["strips"] == 3
-    assert stats["bytes_sent"] == len(fake_serial.written)
-    assert stats["busy_wait_events"] == 0
+    assert stats["bytes_sent"] == len(written)
+    assert stats["cancelled"] is False
+
+
+def test_writes_are_chunked_to_128_bytes():
+    fake = _FakeSerial()
+    sizes = []
+    original_write = fake.write
+    fake.write = lambda data: sizes.append(len(data)) or original_write(data)
+
+    _make_output(fake).print_receipt(
+        Image.new("1", (384, 24), 0), feed_lines_after=0, cancel_event=threading.Event()
+    )
+
+    assert max(sizes) <= UsbSerialOutput.SERIAL_WRITE_CHUNK_BYTES
 
 
 def test_write_retries_partial_writes_until_every_byte_is_sent():
-    fake_serial = _FakeSerial(max_write=7)
-    driver = _make_driver(fake_serial)
+    fake = _FakeSerial(max_write=7)
+    output = _make_output(fake)
     payload = bytes(range(100))
 
-    assert driver._write(payload) == len(payload)
-    assert bytes(fake_serial.written) == payload
-    assert fake_serial.write_calls > 1
+    assert output._write(payload) == len(payload)
+    assert bytes(fake.written) == payload
+    assert fake.write_calls > 1
 
 
 def test_write_raises_when_serial_makes_no_progress():
-    driver = _make_driver(_FakeSerial(zero_progress=True))
+    output = _make_output(_FakeSerial(zero_progress=True))
 
     with pytest.raises(PrinterTransportError, match="no progress"):
-        driver._write(b"receipt")
+        output._write(b"receipt")
 
 
-def test_busy_pin_timeout_is_bounded_and_persisted(monkeypatch, tmp_path):
-    incident_path = tmp_path / "printer-incidents.log"
-    monkeypatch.setenv("PC1_PRINTER_INCIDENT_LOG", str(incident_path))
-    monkeypatch.setattr(PrinterDriver, "BUSY_PIN_DEBOUNCE_SECONDS", 0)
-    monkeypatch.setattr(PrinterDriver, "BUSY_PIN_POLL_SECONDS", 0)
-    monkeypatch.setattr(PrinterDriver, "BUSY_PIN_WAIT_TIMEOUT", 0)
-
-    driver = _make_driver(_FakeSerial())
-    driver._busy_handle = _FakeBusyHandle([1])
-
-    stats = driver._send_bitmap(Image.new("1", (384, 1), 1))
-
-    assert stats["busy_pin_timed_out"] is True
-    assert stats["busy_wait_events"] == 1
-    records = [json.loads(line) for line in incident_path.read_text().splitlines()]
-    assert records[0]["event"] == "busy_pin_timeout"
-
-
-def test_bitmap_failure_is_raised_and_persisted(monkeypatch, tmp_path):
-    incident_path = tmp_path / "printer-incidents.log"
-    monkeypatch.setenv("PC1_PRINTER_INCIDENT_LOG", str(incident_path))
-    driver = _make_driver(_FakeSerial(fail_after=100))
+def test_failure_is_raised_and_connection_dropped_for_reopen():
+    fake = _FakeSerial(fail_after=100)
+    output = _make_output(fake)
 
     with pytest.raises(PrinterTransportError, match="Serial write failed"):
-        driver._send_bitmap(Image.new("1", (384, 24), 0))
+        output.print_receipt(
+            Image.new("1", (384, 24), 0), feed_lines_after=0, cancel_event=threading.Event()
+        )
 
-    records = [json.loads(line) for line in incident_path.read_text().splitlines()]
-    assert records[-1]["event"] == "bitmap_send_failed"
-    assert records[-1]["strip"] == 1
-    assert records[-1]["bytes_sent"] == 100
-    assert driver.last_transport_stats["failed_strip"] == 1
+    assert output.ser is None
+    assert output.last_transport_stats["failed_strip"] == 1
+    assert output.last_transport_stats["bytes_sent"] == 100
+
+
+def test_open_failure_reports_unavailable(monkeypatch):
+    def refuse(port, baudrate):
+        raise OSError("no such device")
+
+    output = UsbSerialOutput(port="/dev/missing", serial_factory=refuse)
+
+    assert output.is_available() is False
+    assert "no such device" in output.describe()["detail"]
+    with pytest.raises(PrinterUnavailableError):
+        output.print_receipt(
+            Image.new("1", (384, 24), 1), feed_lines_after=0, cancel_event=threading.Event()
+        )
+
+
+def test_reconnects_when_adapter_returns(monkeypatch):
+    fake = _FakeSerial()
+    attempts = []
+
+    def flaky(port, baudrate):
+        attempts.append(port)
+        if len(attempts) == 1:
+            raise OSError("unplugged")
+        return fake
+
+    monkeypatch.setattr("app.drivers.usb_serial_output.time.sleep", lambda s: None)
+    output = UsbSerialOutput(port="/dev/ttyUSB0", serial_factory=flaky)
+    assert output.ser is None
+
+    output.wait_for_idle = lambda: None
+    stats = output.print_receipt(
+        Image.new("1", (384, 24), 1), feed_lines_after=0, cancel_event=threading.Event()
+    )
+
+    assert stats["strips"] == 1
+    # Opening sends the printer initialization before the receipt.
+    assert bytes(fake.written).startswith(escpos.NUL * 5 + escpos.ESC_INIT)
+
+
+def test_raster_printer_flush_delivers_cutter_feed_through_output():
+    fake = _FakeSerial()
+    driver = _make_driver(fake)
+    driver.set_cutter_feed(4)
+    driver.print_body("hello")
+
+    driver.flush_buffer()
+
+    assert bytes(fake.written).endswith(escpos.feed_lines(4))
+    assert driver.last_transport_stats["strips"] >= 1

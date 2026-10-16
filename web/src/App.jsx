@@ -207,13 +207,17 @@ function App() {
     try {
       const response = await adminAuthFetch(`/action/print-channel/${position}`, { method: 'POST' });
 
-      if (!response.ok) throw new Error('Failed to trigger print');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to trigger print' }));
+        throw new Error(errorData.detail || 'Failed to trigger print');
+      }
 
       setStatus({ type: 'success', message: `Printing Channel ${position}...` });
       setTimeout(() => setStatus({ type: '', message: '' }), 3000);
     } catch (err) {
       console.error('Error triggering print:', err);
-      setStatus({ type: 'error', message: 'Failed to trigger print' });
+      setStatus({ type: 'error', message: err.message || 'Failed to trigger print' });
+      setTimeout(() => setStatus({ type: '', message: '' }), 3000);
     }
   };
 

@@ -433,7 +433,7 @@ def format_astronomy_receipt(printer, config: Dict[str, Any] = None, module_name
     moon_image = draw_moon_phase_image(data['moon_phase_val'], size=80)
     # Center moon image
     # To center it, we can create a full-width image and paste the moon in the center
-    # OR rely on printer to center it (printer_serial does center images)
+    # OR rely on printer to center it (the raster printer centers images)
     printer.print_image(moon_image)
     
     # Moon data text

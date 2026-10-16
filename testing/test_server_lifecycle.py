@@ -24,7 +24,6 @@ async def test_startup_is_independent_of_host_networking(monkeypatch, tmp_path, 
 
     monkeypatch.setattr(main.subprocess, "run", forbidden_command)
     monkeypatch.setattr(main, "printer", MagicMock())
-    monkeypatch.setattr(main, "button", MagicMock())
     monkeypatch.setattr(main, "dial", MagicMock())
 
     started, stopped = set(), set()
