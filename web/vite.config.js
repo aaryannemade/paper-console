@@ -9,11 +9,12 @@ export default defineConfig({
     tailwindcss()
   ],
   server: {
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-      },
-    },
+    // Forward every backend route the UI calls; print buttons use /action and /debug.
+    proxy: Object.fromEntries(
+      ['/api', '/action', '/debug'].map((prefix) => [
+        prefix,
+        { target: 'http://localhost:8000', changeOrigin: true },
+      ]),
+    ),
   },
 })
