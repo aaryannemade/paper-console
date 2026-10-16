@@ -7,7 +7,6 @@ import { useModuleTypes } from '../hooks/useModuleTypes';
 const ModuleConfig = ({
   module,
   updateConfig,
-  onRefresh,
   suppressRootDescription = false,
   validationErrors = {},
   showValidation = false,
@@ -38,9 +37,7 @@ const ModuleConfig = ({
               formData={config}
               onChange={handleSchemaChange}
               suppressRootDescription={suppressRootDescription}
-              moduleId={module.id}
               moduleType={module.type}
-              onActionComplete={onRefresh}
               validationErrors={validationErrors}
               showValidation={showValidation}
               onUserInteraction={onUserInteraction}

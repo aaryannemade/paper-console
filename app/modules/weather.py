@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from PIL import Image, ImageDraw
 
 import app.config
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.config import current_date, current_datetime, format_print_datetime, format_time
 from app.module_registry import register_module
 
@@ -1126,7 +1126,7 @@ def draw_hourly_forecast_image(
     ui_schema={"location": {"ui:widget": "location-search"}},
 )
 def format_weather_receipt(
-    printer: PrinterDriver,
+    printer: RasterPrinter,
     config: Dict[str, Any] = None,
     module_name: str = None,
     module_id: str = None,

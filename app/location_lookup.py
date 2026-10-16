@@ -163,7 +163,6 @@ def search_locations(query: str, limit: int = 10) -> List[Dict]:
 
     # Pre-compute query characteristics for faster matching
     is_multi_word = len(query_words) > 1
-    first_char = query_lower[0] if query_lower else ""
 
     # Collect candidates first (faster than full processing)
     candidates = []
@@ -317,20 +316,3 @@ def search_locations(query: str, limit: int = 10) -> List[Dict]:
     for result in scored_results:
         result.pop("_score", None)
     return scored_results[:limit]
-
-
-def get_location_by_zip(zipcode: str) -> Optional[Dict]:
-    """
-    Get location details for a zip code (backward compatibility).
-    GeoNames database doesn't have zip codes, so this searches by zip code as a city name.
-    Returns None if not found.
-    """
-    # GeoNames doesn't have zip codes, so search by zip code as a city name
-    # This is mainly for backward compatibility
-    if not zipcode or len(zipcode.strip()) != 5 or not zipcode.strip().isdigit():
-        return None
-
-    results = search_locations(zipcode, limit=1)
-    if results:
-        return results[0]
-    return None

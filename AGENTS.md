@@ -17,18 +17,18 @@ Rules:
 
 ## Container Runtime
 
-The multi-stage `Dockerfile` serves the built UI and API as UID/GID 1000:1000 with `PC1_DATA_DIR=/data`. `docker-compose.yaml` and `portainer-compose.yaml` both use an absolute host bind mount (`/path/to/data:/data`); replace the example host path before deployment. Both run as `user: "${PUID:-1000}:${PGID:-1000}"`; PUID/PGID must match the owner of the data directory. Settings, generated login password and Adventure saves belong under `/data`; bundled datasets, icons and fonts remain read-only in the image. The container runs one Uvicorn worker because scheduling and printer reservations are process-local. Container printing defaults to `esp32`; use `console` for smoke tests without firmware.
+The multi-stage `Dockerfile` serves the built UI and API as UID/GID 1000:1000 with `PC1_DATA_DIR=/data`. `docker-compose.yaml` and `portainer-compose.yaml` both use an absolute host bind mount (`/path/to/data:/data`); replace the example host path before deployment. Both run as `user: "${PUID:-1000}:${PGID:-1000}"`; PUID/PGID must match the owner of the data directory. Their root filesystem is read-only with a temporary `/tmp`. Settings, generated login password and Adventure saves belong under `/data`; bundled datasets, icons and fonts remain read-only in the image. Restoring defaults means stopping the stack and clearing the dedicated host bind-mount directory; `down -v` does not remove bind-mounted files. The container runs one Uvicorn worker because scheduling and printer reservations are process-local. Container printing defaults to `esp32`; use `console` for smoke tests without firmware.
 
 ## Console Raster Preview for Print Debugging
 
 When validating printer output (layout, clipping, alignment, density, or black/white dot rendering), run this feedback loop:
 
 ```bash
-./.venv/bin/python testing/render_all_prints.py --module-type astronomy --output testing/artifacts/debug/feedback_full_print.png
-./.venv/bin/python testing/console_raster_preview.py --image testing/artifacts/debug/feedback_full_print.png --dots-width 384 --cols 96
+python testing/render_all_prints.py --module-type astronomy --output testing/artifacts/debug/feedback_full_print.png
+python testing/console_raster_preview.py --image testing/artifacts/debug/feedback_full_print.png --dots-width 384 --cols 96
 
-./.venv/bin/python testing/render_all_prints.py --channel 3 --output testing/artifacts/debug/feedback_full_print.png
-./.venv/bin/python testing/console_raster_preview.py --image testing/artifacts/debug/feedback_full_print.png --dots-width 384 --cols 96
+python testing/render_all_prints.py --channel 3 --output testing/artifacts/debug/feedback_full_print.png
+python testing/console_raster_preview.py --image testing/artifacts/debug/feedback_full_print.png --dots-width 384 --cols 96
 ```
 
 This workflow:
@@ -39,11 +39,11 @@ This workflow:
 Use this fallback command only for synthetic calibration patterns:
 
 ```bash
-./.venv/bin/python testing/console_raster_preview.py --pattern targets --dots-width 384 --cols 96
+python testing/console_raster_preview.py --pattern targets --dots-width 384 --cols 96
 ```
 
 Rules:
-- Prefer `./.venv/bin/python` in this repo (do not assume `python` is on `PATH`).
+- Run these commands inside `nix develop` (or prefix with `nix develop --command`).
 - Prefer full-print feedback loop previews over synthetic patterns when evaluating actual print changes.
 - Use `--dots-width 384` by default for the 58mm printer path unless a different width is explicitly provided.
 - Use built-in patterns (`grid`, `checker`, `bars`, `targets`) for deterministic diagnostics.
@@ -57,27 +57,27 @@ Use `testing/render_all_prints.py` as the unified debug renderer.
 Full sweep (complete up-to-date PNG gallery):
 
 ```bash
-./.venv/bin/python testing/render_all_prints.py
+python testing/render_all_prints.py
 ```
 
 Optional output directory:
 
 ```bash
-./.venv/bin/python testing/render_all_prints.py --output-dir testing/artifacts/print
+python testing/render_all_prints.py --output-dir testing/artifacts/print
 ```
 
 Targeted single renders:
 
 ```bash
-./.venv/bin/python testing/render_all_prints.py --channel 3
-./.venv/bin/python testing/render_all_prints.py --module-id default-weather-001
-./.venv/bin/python testing/render_all_prints.py --module-type astronomy
+python testing/render_all_prints.py --channel 3
+python testing/render_all_prints.py --module-id default-weather-001
+python testing/render_all_prints.py --module-type astronomy
 ```
 
 Rules:
 - This command is intended to refresh a gallery folder on every run.
 - It overwrites snapshot content by clearing prior `*.png` files in the target folder and regenerating all outputs.
-- It generates channel prints and module prints. (Setup/first-boot/system-ready receipts were removed with WiFi provisioning.)
+- It generates channel prints and module prints.
 - It also renders all registered module types (including unassigned ones). For richer online-module snapshots, define optional test env vars in `.env`:
   - `PC1_TEST_NEWS_API_KEY`
   - `PC1_TEST_EMAIL_USER`
@@ -94,9 +94,9 @@ Rules:
 Use `testing/render_settings_ui.py` as the unified settings UI visual regression helper.
 
 ```bash
-./.venv/bin/python testing/render_settings_ui.py
-./.venv/bin/python testing/render_settings_ui.py --reuse-servers
-./.venv/bin/python testing/render_settings_ui.py --install-browser
+python testing/render_settings_ui.py
+python testing/render_settings_ui.py --reuse-servers
+python testing/render_settings_ui.py --install-browser
 ```
 
 Rules:

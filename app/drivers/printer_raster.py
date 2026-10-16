@@ -15,12 +15,10 @@ from typing import List, Optional, Any
 
 from PIL import Image, ImageDraw, ImageFont
 import app.config
-import app.selection_mode
-from app.drivers.print_outputs import (  # noqa: F401 - re-exported for callers
+from app.drivers.print_outputs import (
     ConsoleOutput,
     PrintOutput,
     PrinterTransportError,
-    PrinterUnavailableError,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,7 +60,6 @@ class RasterPrinter:
     )
 
     # Printer physical specs
-    PRINTER_DPI = 203  # dots per inch
     PRINTER_WIDTH_DOTS = 384  # 58mm paper at 203 DPI
 
     # Fixed typography and spacing constants (pixels)
@@ -88,13 +85,12 @@ class RasterPrinter:
         self._io_lock = threading.RLock()
         self._cancel_event = threading.Event()
         self.last_transport_stats = {}
-        # Buffer for print operations (prints are always inverted/reversed)
+        # Buffered operations are rendered as a bitmap, then rotated for mounting.
         # Each item is a tuple: ('text', line) or ('feed', count) or ('qr', data).
         self.print_buffer = []
-        # Line tracking for max print length
-        self.lines_printed = 0
         self.max_lines = 0  # 0 = no limit, set by reset_buffer
-        self._max_lines_hit = False  # Flag set when max lines exceeded during flush
+        self._max_lines_hit = False
+        self._selection_indicator = False
 
         # Short tear-edge clearance (24 dots ~= 1 line). The bitmap already
         # includes 32 dots of white margin; avoid doubling the paper feed.
@@ -399,8 +395,6 @@ class RasterPrinter:
 
         return lines if lines else [""]
 
-
-
     def _get_line_height_for_style(self, style: str) -> int:
         """Get the line height for a given font style."""
         font = self._get_font(style)
@@ -414,8 +408,8 @@ class RasterPrinter:
         return self.line_height
 
     def _get_left_margin(self) -> int:
-        """Get the left margin, which increases when in selection mode."""
-        if app.selection_mode.is_selection_mode_active():
+        """Get the margin for this receipt's explicit menu indicator."""
+        if self._selection_indicator:
             # 2px dashed line + 6px gap + 2px standard margin
             return 10
         return 2
@@ -433,12 +427,8 @@ class RasterPrinter:
         """
         if op_type == "styled":
             return self._render_op_styled(draw, y, op_data, dry_run)
-        elif op_type == "text":
-            return self._render_op_text_legacy(draw, y, op_data, dry_run)
         elif op_type == "box":
             return self._render_op_box(img, draw, y, op_data, dry_run)
-        elif op_type == "icon":
-            return self._render_op_icon(draw, y, op_data, dry_run)
         elif op_type == "image":
             return self._render_op_image(img, y, op_data, dry_run)
         elif op_type == "article_block":
@@ -474,34 +464,6 @@ class RasterPrinter:
                         else:
                             draw.text((left_margin, y + current_height), line, fill=0)
                     current_height += line_height
-        
-        return (current_height, 0)
-
-    def _render_op_text_legacy(self, draw: ImageDraw.Draw, y: int, op_data: str, dry_run: bool) -> tuple[int, int]:
-        clean_text = self._sanitize_text(op_data)
-        font = self._get_font("regular")
-        current_height = 0
-        
-        paragraphs = clean_text.split("\n")
-        content_width = self._get_content_width()
-        left_margin = self._get_left_margin()
-
-        for paragraph in paragraphs:
-            if not paragraph.strip():
-                current_height += self.line_height
-                if not dry_run:
-                    self.lines_printed += 1
-            else:
-                wrapped_lines = self._wrap_text_by_width(paragraph, font, content_width)
-                for line in wrapped_lines:
-                    if not dry_run and draw:
-                        if font:
-                            draw.text((left_margin, y + current_height), line, font=font, fill=0)
-                        else:
-                            draw.text((left_margin, y + current_height), line, fill=0)
-                    current_height += self.line_height
-                    if not dry_run:
-                        self.lines_printed += 1
         
         return (current_height, 0)
 
@@ -581,20 +543,6 @@ class RasterPrinter:
 
         # 2px margin top + box height
         return (2 + box_height, self.SPACING_MEDIUM)
-
-    def _render_op_icon(self, draw: ImageDraw.Draw, y: int, op_data: dict, dry_run: bool) -> tuple[int, int]:
-        icon_type = op_data.get("type", "sun")
-        size = op_data.get("size", 32)
-        
-        if not dry_run and draw:
-            # Center within content area
-            icon_x = self._get_left_margin() + (self._get_content_width() - size) // 2
-            # SPACING_SMALL top margin
-            icon_y = y + self.SPACING_SMALL
-            self._draw_icon(draw, icon_x, icon_y, icon_type, size)
-            
-        # Top margin + icon size
-        return (self.SPACING_SMALL + size, self.SPACING_SMALL)
 
     def _render_op_image(self, img: Image.Image, y: int, op_data: dict, dry_run: bool) -> tuple[int, int]:
         image = op_data.get("image")
@@ -748,8 +696,6 @@ class RasterPrinter:
         Refactored to use a 2-pass system with dry-run capabilities
         to ensure height calculation perfectly matches drawing.
         """
-        import qrcode as qr_lib
-
         if not ops:
             return None
 
@@ -781,8 +727,8 @@ class RasterPrinter:
              if h > 0:
                  current_y += h + s
         
-        # Draw Selection Mode Visual Indicator
-        if app.selection_mode.is_selection_mode_active():
+        # The menu indicator belongs to this receipt, not global input state.
+        if self._selection_indicator:
             # Draw a thin dashed line along the left side
             # 2px wide, dashed
             
@@ -802,8 +748,6 @@ class RasterPrinter:
         # Rotate
         img = img.rotate(180)
         return img
-
-
 
     def _draw_icon(
         self, draw: ImageDraw.Draw, x: int, y: int, icon_type: str, size: int
@@ -921,12 +865,6 @@ class RasterPrinter:
         # PNG file doesn't exist - skip (no programmatic fallback)
         return
 
-
-
-
-
-
-
     def _generate_qr_image(
         self, data: str, size: int, error_correction: str, fixed_size: bool
     ) -> Image.Image:
@@ -991,17 +929,6 @@ class RasterPrinter:
     def is_cancel_requested(self) -> bool:
         return self._cancel_event.is_set()
 
-    def clear_hardware_buffer(self):
-        """Drop buffered content and reset the printer (server startup)."""
-        with self._io_lock:
-            self.print_buffer.clear()
-            self.lines_printed = 0
-            self.max_lines = 0
-        try:
-            self.output.reset()
-        except Exception:
-            logger.debug("Printer reset failed", exc_info=True)
-
     def _sanitize_text(self, text: str) -> str:
         """
         Convert text to pure ASCII to prevent Chinese character issues.
@@ -1025,17 +952,19 @@ class RasterPrinter:
 
         return "".join(result)
 
-
+    def _measured_height(self, ops) -> int:
+        """Measure actual styled text, images and other operations in dots."""
+        height = last_spacing = 0
+        for kind, data in ops:
+            content, spacing = self._render_op(None, None, 0, kind, data, dry_run=True)
+            if content > 0:
+                height += content + spacing
+                last_spacing = spacing
+        return height - last_spacing
 
     def is_max_lines_exceeded(self) -> bool:
-        """Check if we've exceeded the maximum print length."""
-        if self.max_lines <= 0:
-            return False
-        return self.lines_printed >= self.max_lines
-
-    def was_truncated(self) -> bool:
-        """Check if the last print was truncated due to max lines."""
-        return self._max_lines_hit
+        """Check the current receipt against the configured paper-length limit."""
+        return self.max_lines > 0 and self._measured_height(self.print_buffer) > self.max_lines * self.LINE_HEIGHT
 
     def print_text(self, text: str, style: str = "regular"):
         """Print text with specified style. Buffers for unified bitmap rendering.
@@ -1171,38 +1100,6 @@ class RasterPrinter:
 
         self.print_buffer.append(("article_block", article_data))
 
-    def print_thick_line(self):
-        """Print a bold separator line."""
-        line = "━" * self.width
-        self.print_text(line, "bold")
-
-
-
-
-
-    def print_icon(self, icon_type: str, size: int = 32):
-        """Print a weather/status icon.
-
-        Args:
-            icon_type: Type of icon (sun, cloud, rain, snow, storm, clear)
-            size: Icon size in pixels (default 32)
-        """
-        if len(self.print_buffer) >= self.MAX_BUFFER_SIZE:
-            self.flush_buffer()
-        self.print_buffer.append(
-            (
-                "icon",
-                {
-                    "type": icon_type,
-                    "size": size,
-                },
-            )
-        )
-
-
-
-
-
     def print_image(self, image: Image.Image):
         """Print a generic PIL Image.
 
@@ -1229,10 +1126,8 @@ class RasterPrinter:
             )
         )
 
-
-
     def feed(self, lines: int = 3):
-        """Feed paper (advance lines). Buffers for reverse-order printing."""
+        """Buffer paper spacing with the rest of the receipt."""
         self.print_buffer.append(("feed", lines))
 
     def flush_buffer(self):
@@ -1248,39 +1143,29 @@ class RasterPrinter:
 
             logger.debug("Flushing buffer with %d ops...", len(self.print_buffer))
 
-            # If max_lines is set, trim content from END of buffer
-            total_lines_in_buffer = 0
-            if self.max_lines > 0:
-                for op_type, op_data in self.print_buffer:
-                    if op_type == "text":
-                        total_lines_in_buffer += op_data.count("\n") + 1
-
-                lines_counted = 0
-                trim_index = len(self.print_buffer)
-
-                for i, (op_type, op_data) in enumerate(self.print_buffer):
-                    if op_type == "text":
-                        lines_in_item = op_data.count("\n") + 1
-                        if lines_counted + lines_in_item > self.max_lines:
-                            trim_index = i
-                            self._max_lines_hit = True
-                            break
-                        lines_counted += lines_in_item
-
-                if self._max_lines_hit:
-                    self.print_buffer = self.print_buffer[:trim_index]
-
-            # Add truncation message if needed
-            if self._max_lines_hit:
-                self.print_buffer.append(
-                    ("text", f"-- TRUNCATED ({self.max_lines}/{total_lines_in_buffer}) --")
-                )
-
-            # Render everything as one unified bitmap
             ops = list(self.print_buffer)
+            self._max_lines_hit = False
+            if self.max_lines > 0 and self._measured_height(ops) > self.max_lines * self.LINE_HEIGHT:
+                # Leave room for the notice; never split an image/QR/box mid-op.
+                notice = ("styled", {"text": "-- MAX LENGTH REACHED --", "style": "regular_sm"})
+                allowance = max(0, self.max_lines * self.LINE_HEIGHT - self._measured_height([notice]))
+                trimmed = []
+                measured = 0
+                for kind, data in ops:
+                    height, spacing = self._render_op(None, None, 0, kind, data, dry_run=True)
+                    if height > 0 and measured + height > allowance:
+                        break
+                    trimmed.append((kind, data))
+                    if height > 0:
+                        measured += height + spacing
+                ops = [*trimmed, notice]
+                self._max_lines_hit = True
+
+            # Render the bounded receipt as one unified bitmap.
             self.print_buffer.clear()
 
             img = self._render_unified_bitmap(ops)
+            self._selection_indicator = False
             if not img:
                 logger.debug("No bitmap rendered from ops.")
                 return
@@ -1318,10 +1203,13 @@ class RasterPrinter:
             max_lines: Maximum lines for this print job (0 = no limit)
         """
         self.print_buffer.clear()
-        # Reset line counter
-        self.lines_printed = 0
         self.max_lines = max_lines
         self._max_lines_hit = False
+        self._selection_indicator = False
+
+    def set_selection_indicator(self, enabled: bool = True):
+        """Mark only the current receipt as an interactive menu."""
+        self._selection_indicator = enabled
 
     def set_cutter_feed(self, lines: int):
         """Set the cutter feed space (lines of white space at end of print).
@@ -1329,11 +1217,6 @@ class RasterPrinter:
         Primarily intended for internal overrides and test helpers.
         """
         self.cutter_feed_dots = lines * 24  # 24 dots per line at 203 DPI
-
-    def feed_direct(self, lines: int = 3):
-        """Feed paper immediately, bypassing the receipt buffer."""
-        if lines > 0:
-            self.feed_dots(lines * 24)
 
     def feed_dots(self, dots: int = 12):
         """Feed paper immediately by raw dot count (12 dots ~= half line)."""
@@ -1355,7 +1238,7 @@ class RasterPrinter:
         error_correction: str = "M",
         fixed_size: bool = False,
     ):
-        """Print a QR code using native ESC/POS commands. Buffers for correct print order.
+        """Rasterize a QR code with the rest of the receipt.
 
         Args:
             data: The text/URL to encode in the QR code
@@ -1379,8 +1262,6 @@ class RasterPrinter:
             )
         )
 
-
-
     def close(self):
         """Release the print output."""
         try:
@@ -1399,8 +1280,6 @@ ECHOED_METHODS = (
     "print_bold",
     "print_line",
     "print_article_block",
-    "print_thick_line",
-    "print_icon",
     "print_image",
     "print_qr",
     "feed",

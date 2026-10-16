@@ -460,7 +460,7 @@ def test_button_press_event_prints_through_the_device(relay_printer, monkeypatch
     proc = device_input.InputProcessor()
     proc.configure(main.dial, {
         "press": main.handle_button_press, "hold": main.handle_button_hold,
-        "hold_release": main.handle_button_hold_release, "long_hold": main.handle_button_long_hold,
+        "hold_release": main.handle_button_hold_release,
     })
     monkeypatch.setattr(main.dial, "current_position", 1)
 

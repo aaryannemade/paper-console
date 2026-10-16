@@ -2,13 +2,15 @@
 weather prefetch interplay."""
 
 import asyncio
+import time
 import types
 from datetime import datetime
 
 import pytest
-import pytz
+from zoneinfo import ZoneInfo
 from fastapi import BackgroundTasks, HTTPException
 
+import app.hardware as hardware_module
 import app.main as main_module
 from app.config import (
     ChannelConfig,
@@ -50,8 +52,8 @@ def _run_one_scheduler_pass(monkeypatch, now, channels):
 
 class TestSchedulerLoop:
     def test_cron_rule_fires_at_matching_minute(self, monkeypatch):
-        tz = pytz.timezone("America/New_York")
-        now = tz.localize(datetime(2026, 6, 10, 22, 15, 5))
+        tz = ZoneInfo("America/New_York")
+        now = datetime(2026, 6, 10, 22, 15, 5, tzinfo=tz)
         channels = {
             3: ChannelConfig(
                 modules=[],
@@ -291,3 +293,98 @@ class TestWeatherPrefetchWithCronRules:
         asyncio.run(main_module._run_weather_prefetch_cycle(now))
 
         assert prefetched == []
+
+
+def test_scheduler_loop_skips_trigger_when_hold_reserved(monkeypatch):
+    triggered = []
+    sleep_calls = {"count": 0}
+
+    async def fake_sleep(_seconds):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] == 1:
+            return None
+        raise asyncio.CancelledError
+
+    async def fake_trigger_channel(position, scheduled=False):
+        triggered.append((position, scheduled))
+
+    monkeypatch.setattr(main_module, "current_datetime", lambda: datetime(2026, 4, 3, 12, 0))
+    monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(main_module, "trigger_channel", fake_trigger_channel)
+    monkeypatch.setattr(
+        main_module.settings,
+        "channels",
+        {1: types.SimpleNamespace(schedule=["12:00"])},
+    )
+    monkeypatch.setattr(hardware_module, "print_in_progress", False)
+    monkeypatch.setattr(hardware_module, "hold_action_in_progress", True)
+    monkeypatch.setattr(
+        hardware_module,
+        "hold_action_started_at",
+        time.time(),
+    )
+
+    try:
+        asyncio.run(main_module.scheduler_loop())
+    except asyncio.CancelledError:
+        pass
+
+    assert triggered == []
+    hardware_module.clear_print_reservation()
+
+
+def test_run_weather_prefetch_cycle_warms_upcoming_scheduled_weather(monkeypatch):
+    calls = []
+    main_module._weather_prefetch_state.clear()
+
+    async def run_cycle():
+        await main_module._run_weather_prefetch_cycle(datetime(2026, 4, 3, 7, 57, 30))
+        await asyncio.sleep(0)
+
+    module = types.SimpleNamespace(id="weather-one", type="weather", config={"city_name": "Worcester"})
+    channel = ChannelConfig(
+        modules=[ChannelModuleAssignment(module_id="weather-one", order=0)],
+        schedule=["08:00"],
+    )
+
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        types.SimpleNamespace(
+            channels={1: channel},
+            modules={"weather-one": module},
+        ),
+    )
+    monkeypatch.setattr(main_module, "_weather_prefetch_lead_seconds", lambda *_args: 180)
+    monkeypatch.setattr(
+        main_module.weather,
+        "prefetch_weather",
+        lambda config, module_id=None: calls.append((module_id, dict(config or {}))) or {"ok": True},
+    )
+
+    asyncio.run(run_cycle())
+
+    assert calls == [("weather-one", {"city_name": "Worcester"})]
+
+
+def test_email_polling_loop_uses_configured_interval_for_auto_print(monkeypatch):
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise asyncio.CancelledError
+
+    module = types.SimpleNamespace(
+        type="email",
+        config={"auto_print_new": True, "polling_interval": 60},
+    )
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(main_module.settings, "modules", {"email-1": module})
+
+    try:
+        asyncio.run(main_module.email_polling_loop())
+    except asyncio.CancelledError:
+        pass
+
+    assert sleep_calls == [60]

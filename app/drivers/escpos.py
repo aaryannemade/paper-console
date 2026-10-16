@@ -18,7 +18,6 @@ DOTS_PER_LINE = 24
 MAX_FEED_UNITS = 255
 
 NUL = b"\x00"
-CAN = b"\x18"  # Cancel print data in page mode
 ESC_INIT = b"\x1b\x40"  # ESC @ — hardware reset
 CANCEL_CHINESE_MODE = b"\x1c\x2e"  # FS .
 USA_CHARSET = b"\x1b\x52\x00"  # ESC R 0

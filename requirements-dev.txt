@@ -1,3 +1,6 @@
 -r requirements.txt
+# Local USB printer development; the ESP32 container does not use USB.
+pyserial
+pyusb
 pytest
 pytest-asyncio

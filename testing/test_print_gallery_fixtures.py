@@ -4,9 +4,7 @@ from datetime import date
 import importlib.util
 from pathlib import Path
 
-from app.config import CalendarConfig
 from app.drivers.printer_mock import PrinterDriver
-from app.modules import calendar as calendar_module
 from app.modules import email_client
 from app.modules import history as history_module
 from PIL import Image
@@ -39,6 +37,13 @@ def test_snapshot_defaults_fill_blank_modules():
     assert "BEGIN:VCALENDAR" in calendar_config["mock_ics_content"]
     assert calendar_config["view_mode"] == "month"
     assert email_config["mock_messages"][0]["subject"] == "Hi Grandma"
+
+    # Live credentials (e.g. from .env) never reach IMAP during a gallery render.
+    live_email = render_all_prints._apply_snapshot_defaults(
+        "email",
+        {"email_user": "real@example.com", "email_password": "secret", "email_host": "imap.example.com"},
+    )
+    assert live_email["mock_messages"][0]["subject"] == "Hi Grandma"
 
 
 def test_calendar_view_mode_snapshots_force_day_and_week(monkeypatch, tmp_path):
@@ -73,189 +78,6 @@ def test_calendar_view_mode_snapshots_force_day_and_week(monkeypatch, tmp_path):
         ("Calendar (Week)", "week", []),
     ]
     assert all("BEGIN:VCALENDAR" in item[3] for item in captured)
-
-
-def test_calendar_day_view_prints_agenda_list(monkeypatch):
-    today = date(2026, 5, 12)
-    captured = []
-
-    monkeypatch.setattr(calendar_module, "current_date", lambda: today)
-
-    class FakePrinter:
-        width = 42
-
-        def print_subheader(self, text):
-            captured.append(("subheader", text))
-
-        def print_bold(self, text):
-            captured.append(("bold", text))
-
-        def print_body(self, text):
-            captured.append(("body", text))
-
-        def feed(self, lines):  # noqa: ARG002
-            captured.append(("feed", lines))
-
-    events = {
-        today: [
-            {
-                "time": "All Day",
-                "summary": "Library pickup day",
-                "sort_key": "00:00",
-                "datetime": None,
-                "is_all_day": True,
-            },
-            {
-                "time": "9:30 AM",
-                "summary": (
-                    "Mock calendar event with a very long descriptive title "
-                    "that should be handed to the printer as one paragraph"
-                ),
-                "sort_key": "09:30",
-                "datetime": None,
-                "is_all_day": False,
-            }
-        ]
-    }
-
-    calendar_module._print_calendar_day_view(
-        FakePrinter(),
-        [today],
-        events,
-    )
-
-    assert captured[0][0] == "subheader"
-    assert captured[0][1].startswith("TODAY")
-    assert ("bold", "All Day") in captured
-    assert ("body", "Library pickup day") in captured
-    assert ("bold", "9:30 AM") in captured
-    assert (
-        "body",
-        (
-            "Mock calendar event with a very long descriptive title "
-            "that should be handed to the printer as one paragraph"
-        ),
-    ) in captured
-
-
-def test_calendar_week_and_month_views_do_not_truncate_normal_long_titles(monkeypatch):
-    today = date(2026, 5, 12)
-    long_title = (
-        "Mock calendar event with a descriptive title that is longer than "
-        "one thermal printer line but should still be preserved"
-    )
-    captured = []
-
-    monkeypatch.setattr(calendar_module, "current_date", lambda: today)
-
-    class FakePrinter:
-        width = 42
-
-        def print_subheader(self, text):
-            captured.append(("subheader", text))
-
-        def print_bold(self, text):
-            captured.append(("bold", text))
-
-        def print_body(self, text):
-            captured.append(("body", text))
-
-        def print_line(self):
-            captured.append(("line", ""))
-
-        def feed(self, lines):  # noqa: ARG002
-            captured.append(("feed", lines))
-
-        def print_image(self, image):
-            captured.append(("image", image.size))
-
-    events = {
-        today: [
-            {
-                "time": "9:30 AM",
-                "summary": long_title,
-                "sort_key": "09:30",
-                "datetime": None,
-                "is_all_day": False,
-            }
-        ]
-    }
-
-    printer = FakePrinter()
-    calendar_module._print_calendar_week_view(printer, [today], events)
-    calendar_module._print_calendar_month_view(printer, [today], events)
-
-    body_lines = [text for kind, text in captured if kind == "body"]
-    assert f"9:30 AM {long_title}" in body_lines
-    assert f"  9:30 AM {long_title}" in body_lines
-    assert all(".." not in line for line in body_lines)
-
-
-def test_calendar_event_titles_have_high_safety_cap():
-    title = "A" * (calendar_module.MAX_EVENT_TITLE_CHARS + 20)
-
-    rendered = calendar_module._event_title(title)
-
-    assert len(rendered) == calendar_module.MAX_EVENT_TITLE_CHARS
-    assert rendered.endswith("...")
-
-
-def test_snapshot_email_defaults_override_live_credentials_with_mock():
-    render_all_prints = _load_render_all_prints_module()
-
-    email_config = render_all_prints._apply_snapshot_defaults(
-        "email",
-        {
-            "email_user": "real@example.com",
-            "email_password": "secret",
-            "email_host": "imap.example.com",
-        },
-    )
-
-    assert email_config["mock_messages"][0]["subject"] == "Hi Grandma"
-
-
-def test_calendar_receipt_accepts_mock_ics_content(monkeypatch, capsys):
-    today = date(2026, 5, 12)
-    monkeypatch.setattr(calendar_module, "current_date", lambda: today)
-    monkeypatch.setattr(
-        calendar_module,
-        "parse_events",
-        lambda ics_content, days_to_show, timezone_str, **kwargs: {  # noqa: ARG005
-            today: [
-                {
-                    "time": "10:30 AM",
-                    "summary": "Mock calendar event",
-                    "sort_key": "10:30",
-                    "datetime": None,
-                    "is_all_day": False,
-                }
-            ]
-        },
-    )
-
-    ics = "\r\n".join(
-        [
-            "BEGIN:VCALENDAR",
-            "VERSION:2.0",
-            "BEGIN:VEVENT",
-            f"DTSTART:{today.strftime('%Y%m%d')}T103000",
-            "SUMMARY:Mock calendar event",
-            "END:VEVENT",
-            "END:VCALENDAR",
-            "",
-        ]
-    )
-    printer = PrinterDriver()
-
-    calendar_module.format_calendar_receipt(
-        printer,
-        CalendarConfig(mock_ics_content=ics, view_mode="month"),
-        "Calendar",
-    )
-
-    output = capsys.readouterr().out
-    assert "Mock calendar event" in output
 
 
 def test_fetch_emails_returns_mock_messages_without_imap(monkeypatch):

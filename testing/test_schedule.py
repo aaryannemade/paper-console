@@ -3,7 +3,7 @@
 from datetime import datetime
 
 import pytest
-import pytz
+from zoneinfo import ZoneInfo
 
 from app.schedule_utils import (
     cron_matches_minute,
@@ -167,8 +167,8 @@ class TestCronMatchesMinute:
         assert cron_matches_minute("0 9 * * 1-5", saturday) is False
 
     def test_timezone_aware_now(self):
-        tz = pytz.timezone("America/New_York")
-        now = tz.localize(datetime(2026, 6, 10, 22, 15))
+        tz = ZoneInfo("America/New_York")
+        now = datetime(2026, 6, 10, 22, 15, tzinfo=tz)
         assert cron_matches_minute("15 22 * * *", now) is True
 
 
@@ -193,8 +193,8 @@ class TestNextFireTimes:
         assert fires == [datetime(2026, 6, 10, 8, 30)]
 
     def test_preserves_timezone_awareness(self):
-        tz = pytz.timezone("America/New_York")
-        now = tz.localize(datetime(2026, 6, 10, 8, 28))
+        tz = ZoneInfo("America/New_York")
+        now = datetime(2026, 6, 10, 8, 28, tzinfo=tz)
         fires = next_fire_times(["30 8 * * *"], now, horizon_seconds=240)
         assert len(fires) == 1
         assert fires[0].tzinfo is not None

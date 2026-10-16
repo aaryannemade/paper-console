@@ -298,21 +298,6 @@ class UsbSerialOutput(PrintOutput):
                 logger.debug("USB feed failed", exc_info=True)
                 self._drop_connection()
 
-    def reset(self) -> None:
-        with self._io_lock:
-            if not self._try_open():
-                return
-            try:
-                self._write(escpos.CAN)
-                time.sleep(0.05)
-                self._write(escpos.ESC_INIT)
-                time.sleep(0.3)
-                self._write(escpos.ASCII_SETTINGS)
-            except PrinterTransportError:
-                logger.debug("USB printer reset failed", exc_info=True)
-                self._drop_connection()
-
-
 def _open_native_usb(_port: str, _baudrate: int):
     from app.drivers.usb_bulk_printer import UsbBulkPort, find_native_printer
 

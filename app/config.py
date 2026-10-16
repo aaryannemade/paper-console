@@ -1,6 +1,7 @@
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, Dict, List, Any, Union, Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Optional, Dict, List, Any, Literal
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import json
 import os
 import uuid
@@ -42,18 +43,6 @@ class PrintWebhookConfig(BaseModel):
     print_sender_ip: bool = False
     print_content_type: bool = False
     print_user_agent: bool = False
-
-
-class NewsConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    news_api_key: Optional[str] = None
-    country: str = "us"
-    page_size: int = 3
-
-
-class RSSConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    rss_feeds: List[str] = []
 
 
 class EmailConfig(BaseModel):
@@ -107,16 +96,6 @@ class QRCodeConfig(BaseModel):
     error_correction: str = "H"  # High error correction for durability
 
 
-class WeatherConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    openweather_api_key: Optional[str] = None
-    city_name: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    timezone: Optional[str] = None
-    forecast_type: str = "daily"  # "daily" or "hourly"
-
-
 class CalendarSource(BaseModel):
     model_config = ConfigDict(extra="ignore")
     label: Optional[str] = None
@@ -131,11 +110,6 @@ class CalendarConfig(BaseModel):
     days_to_show: Optional[int] = None  # Legacy fallback for older saved configs.
     mock_ics_content: Optional[str] = None
 
-
-
-class EmptyConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    pass
 
 
 class ModuleInstance(BaseModel):
@@ -159,7 +133,7 @@ class ChannelModuleAssignment(BaseModel):
 
 
 class ScheduleRule(BaseModel):
-    """A cron-based schedule rule, evaluated in the device timezone."""
+    """A cron-based schedule rule, evaluated in the configured app timezone."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -181,9 +155,6 @@ class ChannelConfig(BaseModel):
 
     # Cron schedule rules (current format).
     schedule_rules: List[ScheduleRule] = []
-
-
-from pydantic import field_validator, Field
 
 
 # Default module IDs (fixed UUIDs for predictable defaults)
@@ -342,10 +313,8 @@ class Settings(BaseModel):
     @classmethod
     def validate_timezone(cls, v):
         try:
-            import pytz
-
-            pytz.timezone(v)
-        except Exception:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, TypeError, ValueError):
             return "America/New_York"
         return v
 
@@ -522,12 +491,9 @@ def format_time(dt: datetime, time_format: Optional[str] = None) -> str:
 def current_datetime() -> datetime:
     """Return the current datetime in the configured timezone."""
     try:
-        import pytz
-
-        tz = pytz.timezone(settings.timezone)
-        return datetime.now(tz)
-    except Exception:
-        return datetime.now()
+        return datetime.now(ZoneInfo(settings.timezone))
+    except ZoneInfoNotFoundError:
+        return datetime.now(ZoneInfo("UTC"))
 
 
 def current_date():

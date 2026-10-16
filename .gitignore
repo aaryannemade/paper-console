@@ -34,7 +34,10 @@ config.json.bak
 .env
 .env.local
 .env.*.local
+# Ignore existing local first-boot artifacts from older installations.
 .welcome_printed
+.coverage
+htmlcov/
 
 # IDE
 .vscode/

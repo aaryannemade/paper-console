@@ -1,16 +1,16 @@
 """Cron-based schedule helpers.
 
-All schedule rules are evaluated in the device's configured timezone
+All schedule rules are evaluated in the application's configured timezone
 (``settings.timezone``). Rules are stored as 5-field cron expressions.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Iterable, List, Optional, Sequence
 
 from croniter import croniter
-import pytz
 
 
 DEFAULT_TIMEZONE = "UTC"
@@ -39,15 +39,15 @@ def resolve_timezone_name(timezone_name: Optional[str], fallback: str = DEFAULT_
     candidate = (timezone_name or "").strip()
     if candidate:
         try:
-            pytz.timezone(candidate)
+            ZoneInfo(candidate)
             return candidate
-        except Exception:
+        except (ZoneInfoNotFoundError, ValueError):
             pass
 
     try:
-        pytz.timezone(fallback)
+        ZoneInfo(fallback)
         return fallback
-    except Exception:
+    except (ZoneInfoNotFoundError, ValueError):
         return DEFAULT_TIMEZONE
 
 
@@ -55,7 +55,7 @@ def strip_cron_prefix(raw_expression: str) -> str:
     """Drop a leading ``CRON_TZ=``/``TZ=`` token if present.
 
     Per-rule timezones are not supported; schedules always run in the
-    device timezone. The prefix is tolerated (and ignored) so pasted
+    configured timezone. The prefix is tolerated (and ignored) so pasted
     expressions from other systems don't hard-fail.
     """
     parts = str(raw_expression or "").strip().split()

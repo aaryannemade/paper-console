@@ -1,7 +1,7 @@
 import requests
 from typing import Dict, Any
 from urllib.parse import urlparse, urlunparse
-from app.config import format_print_datetime, settings
+from app.config import format_print_datetime
 from app.module_registry import register_module
 
 
@@ -69,7 +69,6 @@ def get_newsapi_articles(config: Dict[str, Any] = None):
 # --- FORMATTER ---
 
 
-from app.utils import wrap_text
 
 
 @register_module(

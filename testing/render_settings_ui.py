@@ -116,9 +116,6 @@ def _parse_port(url: str, default_port: int) -> int:
 
 
 def _python_exec() -> str:
-    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
-    if venv_python.exists():
-        return str(venv_python)
     return sys.executable
 
 

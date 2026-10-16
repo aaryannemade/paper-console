@@ -126,6 +126,7 @@ def test_event_shapes_are_validated():
         {"event_id": "c", "type": "button", "gesture": "press"},
         {"event_id": "c", "type": "button", "press_id": 1},
         {"event_id": "c", "type": "button", "gesture": "double", "press_id": 1},
+        {"event_id": "c", "type": "button", "gesture": "long_hold", "press_id": 1},
         {"event_id": "", "type": "position", "position": 1},
         {"event_id": "x" * 65, "type": "position", "position": 1},
         {"event_id": "c", "type": "button", "gesture": "press", "press_id": True},
@@ -141,7 +142,7 @@ def test_event_shapes_are_validated():
 def processor():
     calls = []
     results = {"press": "printing_channel", "hold": "hold_ready",
-               "hold_release": "quick_actions", "long_hold": "factory_reset"}
+               "hold_release": "quick_actions"}
     proc = InputProcessor()
     selector = ChannelSelector()
 
@@ -189,15 +190,9 @@ def test_hold_that_cancels_consumes_the_rest_of_the_press(processor):
     processor.results["hold"] = "cancel_requested"
     assert processor.process(_button("hold", press_id=5))["result"] == "cancel_requested"
     assert processor.process(_button("hold_release", press_id=5))["result"] == "ignored_consumed"
-    assert processor.process(_button("long_hold", press_id=5))["result"] == "ignored_consumed"
     # The next physical press works normally.
     assert processor.process(_button("hold_release", press_id=6))["result"] == "quick_actions"
     assert [c[0] for c in processor.calls] == ["hold", "hold_release"]
-
-
-def test_factory_reset_press_cannot_also_open_quick_actions(processor):
-    assert processor.process(_button("long_hold", press_id=9))["result"] == "factory_reset"
-    assert processor.process(_button("hold_release", press_id=9))["result"] == "ignored_consumed"
 
 
 def test_handler_failure_is_reported_not_raised(processor):
@@ -251,7 +246,7 @@ def test_press_prints_the_reported_channel(monkeypatch, idle):
     proc = InputProcessor()
     proc.configure(main.dial, {
         "press": main.handle_button_press, "hold": main.handle_button_hold,
-        "hold_release": main.handle_button_hold_release, "long_hold": main.handle_button_long_hold,
+        "hold_release": main.handle_button_hold_release,
     })
 
     result = _run_with_loop(monkeypatch, lambda: proc.process(_button("press", position=3)))
@@ -307,7 +302,7 @@ def test_gestures_report_unavailable_printer_without_reserving(monkeypatch, idle
     monkeypatch.setattr(main, "printer", offline)
 
     for handler in (main.handle_button_press, main.handle_button_hold,
-                    main.handle_button_hold_release, main.handle_button_long_hold):
+                    main.handle_button_hold_release):
         assert _run_with_loop(monkeypatch, handler) == "printer_unavailable"
     assert hardware.print_in_progress is False
     assert hardware.hold_action_in_progress is False
@@ -319,3 +314,20 @@ def test_health_reports_device_input_state(monkeypatch, no_token):
     health = asyncio.run(main.health_check())
     assert health["components"]["device_input"] == "enabled"
     assert "button" not in health["components"] and "dial" not in health["components"]
+
+
+def test_hold_when_idle_arms_quick_actions_with_tactile_feed(monkeypatch):
+    calls = []
+
+    class FakePrinter:
+        def feed_dots(self, dots):
+            calls.append(("feed", dots))
+
+    monkeypatch.setattr(main, "printer", FakePrinter())
+    monkeypatch.setattr(main, "request_print_cancel", lambda: False)
+    monkeypatch.setattr(
+        main, "reserve_hold_action", lambda: calls.append("reserve") or True
+    )
+
+    assert main.handle_button_hold() == "hold_ready"
+    assert calls == ["reserve", ("feed", 12)]

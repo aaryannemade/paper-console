@@ -96,7 +96,7 @@ def handle_selection(dial_position: int) -> bool:
     """
     Handle a button press while in selection mode.
     
-    This is called by main.py when the button is pressed and selection mode is active.
+    Called by the HTTP input handler when a press arrives in selection mode.
     
     Args:
         dial_position: The current dial position (1-8)

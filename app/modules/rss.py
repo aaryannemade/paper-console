@@ -3,7 +3,7 @@ import requests
 from typing import Dict, Any
 from bs4 import BeautifulSoup
 import re
-from app.config import format_print_datetime, settings
+from app.config import format_print_datetime
 from app.modules.news import clean_url
 from app.module_registry import register_module
 
@@ -74,7 +74,6 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-from app.utils import wrap_text
 
 
 def get_rss_articles(config: Dict[str, Any] = None):

@@ -4,7 +4,6 @@ import { useModuleTypes } from '../hooks/useModuleTypes';
 import { commonClasses } from '../design-tokens';
 import CloseButton from './CloseButton';
 import BinIcon from '../assets/BinIcon';
-import { adminAuthFetch } from '../lib/adminAuthFetch';
 import { getModuleValidationErrors } from '../lib/moduleValidation';
 
 const stableSort = (value) => {
@@ -170,23 +169,6 @@ const EditModuleModal = ({ moduleId, module, setModule, onClose, onSave, onDelet
                       }
                     : prev,
                 );
-              }}
-              onRefresh={async () => {
-                // Fetch fresh settings and update the module state
-                try {
-                  const res = await adminAuthFetch('/api/settings');
-                  const data = await res.json();
-                  const freshModule = data.modules?.[moduleId];
-                  if (freshModule) {
-                    setModule(freshModule);
-                    initialSnapshotRef.current = stableSerialize(freshModule);
-                    setShowValidation(false);
-                    setHasUserEdited(false);
-                    setSaveError('');
-                  }
-                } catch (e) {
-                  console.error('Failed to refresh module:', e);
-                }
               }}
             />
           </div>

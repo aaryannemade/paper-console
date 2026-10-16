@@ -70,9 +70,6 @@ class PrintOutput:
     def feed(self, dots: int) -> None:
         """Feed paper outside a receipt (tactile feedback). Must not raise."""
 
-    def reset(self) -> None:
-        """Clear the printer's buffer/settings (server startup). Must not raise."""
-
     def close(self) -> None:
         pass
 

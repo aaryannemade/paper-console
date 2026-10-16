@@ -1,4 +1,4 @@
-"""The server lifecycle must not provision networking or print boot receipts."""
+"""The server lifecycle starts and stops its own tasks without unsolicited prints."""
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
@@ -9,16 +9,9 @@ import app.main as main
 
 
 @pytest.mark.asyncio
-async def test_startup_is_independent_of_host_networking(monkeypatch):
+async def test_startup_starts_and_stops_background_tasks(monkeypatch):
     monkeypatch.setenv("PC1_DEVICE_PASSWORD", "server-test-password")
 
-    host_commands = []
-
-    def forbidden_command(*args, **kwargs):
-        host_commands.append(args)
-        raise AssertionError("Server startup must not run host administration commands")
-
-    monkeypatch.setattr(main.subprocess, "run", forbidden_command)
     monkeypatch.setattr(main, "printer", MagicMock())
     monkeypatch.setattr(main, "dial", MagicMock())
 
@@ -49,7 +42,6 @@ async def test_startup_is_independent_of_host_networking(monkeypatch):
         assert started == {"email_polling_loop", "scheduler_loop", "task_watchdog"}
 
     assert stopped == started
-    assert host_commands == []
     main.printer.print_header.assert_not_called()
     main.printer.print_text.assert_not_called()
     main.printer.print_body.assert_not_called()

@@ -2,7 +2,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from app.config import SlackConfig, format_print_datetime
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.module_registry import register_module
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ STATUS_LABELS = {
     },
 )
 def format_slack_receipt(
-    printer: PrinterDriver,
+    printer: RasterPrinter,
     config: Optional[Dict[str, Any]] = None,
     module_name: str = None,
     module_id: str = None,

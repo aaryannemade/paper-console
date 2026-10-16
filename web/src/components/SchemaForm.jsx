@@ -4,7 +4,6 @@ import LocationSearch from './widgets/LocationSearch';
 import KeyValueList from './widgets/KeyValueList';
 import PresetSelect from './widgets/PresetSelect';
 import WebhookTest from './widgets/WebhookTest';
-import ActionButton from './widgets/ActionButton';
 import RichTextEditor from './widgets/RichTextEditor';
 import ImageWidget from './widgets/ImageWidget';
 import SlackHelp from './widgets/SlackHelp';
@@ -147,9 +146,7 @@ const AdvancedSection = ({
   parentRequired = [],
   rootValue,
   onRootChange,
-  moduleId,
   moduleType,
-  onActionComplete,
   validationErrors = {},
   showValidation = false,
   onUserInteraction = () => {},
@@ -194,9 +191,7 @@ const AdvancedSection = ({
               required={parentRequired.includes(field)}
               rootValue={rootValue}
               onRootChange={onRootChange}
-              moduleId={moduleId}
               moduleType={moduleType}
-              onActionComplete={onActionComplete}
               validationErrors={validationErrors}
               showValidation={showValidation}
               onUserInteraction={onUserInteraction}
@@ -251,9 +246,7 @@ const SchemaForm = ({
   formData = {},
   onChange,
   suppressRootDescription = false,
-  moduleId,
   moduleType,
-  onActionComplete,
   validationErrors = {},
   showValidation = false,
   onUserInteraction = () => {},
@@ -271,9 +264,7 @@ const SchemaForm = ({
         suppressRootDescription={suppressRootDescription}
         rootValue={formData}
         onRootChange={onChange}
-        moduleId={moduleId}
         moduleType={moduleType}
-        onActionComplete={onActionComplete}
         validationErrors={validationErrors}
         showValidation={showValidation}
         onUserInteraction={onUserInteraction}
@@ -294,9 +285,7 @@ const SchemaField = ({
   compact,
   rootValue,
   onRootChange,
-  moduleId,
   moduleType,
-  onActionComplete,
   validationErrors = {},
   showValidation = false,
   onUserInteraction = () => {},
@@ -411,17 +400,6 @@ const SchemaField = ({
             <div className="mb-6">
                 <WebhookTest formData={rootValue} />
             </div>
-        );
-    }
-    
-    if (widget === 'action-button') {
-        return (
-            <ActionButton
-                schema={schema}
-                uiSchema={uiSchema}
-                moduleId={moduleId}
-                onActionComplete={onActionComplete}
-            />
         );
     }
     
@@ -541,9 +519,7 @@ const SchemaField = ({
                                 parentRequired={schema.required || []}
                                 rootValue={rootValue}
                                 onRootChange={onRootChange}
-                                moduleId={moduleId}
                                 moduleType={moduleType}
-                                onActionComplete={onActionComplete}
                                 validationErrors={validationErrors}
                                 showValidation={showValidation}
                                 onUserInteraction={onUserInteraction}
@@ -568,9 +544,7 @@ const SchemaField = ({
                                 compact={isCompactItem}
                                 rootValue={rootValue}
                                 onRootChange={onRootChange}
-                                moduleId={moduleId}
                                 moduleType={moduleType}
-                                onActionComplete={onActionComplete}
                                 validationErrors={validationErrors}
                                 showValidation={showValidation}
                                 onUserInteraction={onUserInteraction}
@@ -640,7 +614,6 @@ const SchemaField = ({
                                     value={item}
                                     onChange={(val) => handleChangeItem(index, val)}
                                     path={[...path, index]}
-                                    moduleId={moduleId}
                                     moduleType={moduleType}
                                     validationErrors={validationErrors}
                                     showValidation={showValidation}

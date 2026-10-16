@@ -8,7 +8,6 @@ from PIL import Image
 from starlette.requests import Request
 
 import app.main as main_module
-import app.hardware as hardware_module
 import app.print_webhook_service as print_webhook_service
 from app.config import ChannelConfig, ChannelModuleAssignment, ModuleInstance, PrintWebhookConfig
 from app.modules import print_webhook
@@ -549,6 +548,7 @@ def test_print_parsed_job_prints_text_and_remote_image(monkeypatch):
             return None
 
     def fake_get(url, timeout=10, stream=True, allow_redirects=False):  # noqa: ARG001
+        assert allow_redirects is False
         requested["url"] = url
         return _ImageResponse()
 
@@ -602,10 +602,15 @@ def test_print_parsed_job_prints_error_when_remote_image_exceeds_limit(monkeypat
 
     monkeypatch.setattr(print_webhook, "INCOMING_WEBHOOK_REMOTE_IMAGE_MAX_BYTES", 8)
     monkeypatch.setattr(print_webhook, "validate_remote_image_url", lambda url: url)
+
+    def fake_get(url, timeout=10, stream=True, allow_redirects=False):  # noqa: ARG001
+        assert allow_redirects is False
+        return _ImageResponse()
+
     monkeypatch.setattr(
         print_webhook.requests,
         "get",
-        lambda url, timeout=10, stream=True, allow_redirects=False: _ImageResponse(),  # noqa: ARG005
+        fake_get,
     )
 
     print_webhook.print_parsed_job(
@@ -755,46 +760,3 @@ def test_run_print_webhook_print_job_clears_reservation(monkeypatch):
     assert printer.body == ["Motion detected"]
     assert printer.flushed == 1
     assert cleared == [False]
-
-
-def test_api_printer_status_reports_reservation_busy(monkeypatch):
-    monkeypatch.setattr(main_module, "_printer_is_available", lambda: True)
-    monkeypatch.setattr(hardware_module, "print_in_progress", True)
-    monkeypatch.setattr(hardware_module, "hold_action_in_progress", False)
-
-    status = asyncio.run(main_module.get_printer_status())
-
-    assert status["ready"] is False
-    assert status["reason"] == "printing"
-
-
-def test_api_printer_status_does_not_probe_hardware(monkeypatch):
-    class _BusyPrinter:
-        def is_printer_busy(self):
-            pytest.fail("Status polling must not query the serial printer")
-
-    monkeypatch.setattr(main_module, "printer", _BusyPrinter())
-    monkeypatch.setattr(main_module, "_printer_is_available", lambda: True)
-    monkeypatch.setattr(hardware_module, "print_in_progress", False)
-    monkeypatch.setattr(hardware_module, "hold_action_in_progress", False)
-
-    status = asyncio.run(main_module.get_printer_status())
-
-    assert status["ready"] is True
-    assert status["reason"] == "idle"
-
-
-def test_api_printer_status_reports_idle_and_accepting_jobs(monkeypatch):
-    class _IdlePrinter:
-        def is_printer_busy(self):
-            return False
-
-    monkeypatch.setattr(main_module, "printer", _IdlePrinter())
-    monkeypatch.setattr(main_module, "_printer_is_available", lambda: True)
-    monkeypatch.setattr(hardware_module, "print_in_progress", False)
-    monkeypatch.setattr(hardware_module, "hold_action_in_progress", False)
-
-    status = asyncio.run(main_module.get_printer_status())
-
-    assert status["ready"] is True
-    assert status["reason"] == "idle"

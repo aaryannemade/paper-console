@@ -12,7 +12,7 @@ Supports multiple QR code types:
 """
 
 from app.config import QRCodeConfig, format_print_datetime
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.module_registry import register_module
 from app.qr_payloads import generate_wifi_qr_payload
 
@@ -134,7 +134,7 @@ def _generate_email(email: str, subject: str = "", body: str = "") -> str:
         }
     }
 )
-def format_qrcode_receipt(printer: PrinterDriver, config: dict, module_name: str = None):
+def format_qrcode_receipt(printer: RasterPrinter, config: dict, module_name: str = None):
     """Print a QR code based on configuration."""
     # Map independent fields to content
     if isinstance(config, dict):
@@ -161,7 +161,6 @@ def format_qrcode_receipt(printer: PrinterDriver, config: dict, module_name: str
     # Generate QR code data based on type
     qr_type = qr_config.qr_type.lower()
     qr_data = ""
-    description = ""
     
     if qr_type == "wifi":
         qr_data = generate_wifi_qr_payload(
@@ -170,7 +169,6 @@ def format_qrcode_receipt(printer: PrinterDriver, config: dict, module_name: str
             security=qr_config.wifi_security,
             hidden=qr_config.wifi_hidden
         )
-        description = "Scan to connect"
         printer.print_subheader("WiFi Network")
         printer.print_bold(qr_config.wifi_ssid)
         if qr_config.wifi_security.upper() != "NOPASS":
@@ -185,7 +183,6 @@ def format_qrcode_receipt(printer: PrinterDriver, config: dict, module_name: str
             phone=qr_config.contact_phone,
             email=qr_config.contact_email
         )
-        description = "Scan to add contact"
         printer.print_subheader("Contact")
         
         full_name = f"{qr_config.contact_name} {qr_config.contact_last_name}".strip()
@@ -197,19 +194,16 @@ def format_qrcode_receipt(printer: PrinterDriver, config: dict, module_name: str
     
     elif qr_type == "phone":
         qr_data = _generate_phone(qr_config.content)
-        description = "Scan to call"
         printer.print_subheader("Phone")
         printer.print_bold(qr_config.content)
     
     elif qr_type == "sms":
         qr_data = _generate_sms(qr_config.content)
-        description = "Scan to text"
         printer.print_subheader("SMS")
         printer.print_bold(qr_config.content)
     
     elif qr_type == "email":
         qr_data = _generate_email(qr_config.content)
-        description = "Scan to email"
         printer.print_subheader("Email")
         printer.print_bold(qr_config.content)
     
@@ -217,14 +211,12 @@ def format_qrcode_receipt(printer: PrinterDriver, config: dict, module_name: str
         qr_data = qr_config.content
         if not qr_data.startswith(("http://", "https://")):
             qr_data = "https://" + qr_data
-        description = "Scan to visit"
         printer.print_subheader("Link")
         # Let print_body handle wrapping automatically
         printer.print_body(qr_config.content)
     
     else:  # Default to plain text
         qr_data = qr_config.content
-        description = "Scan to view"
         printer.print_subheader("Text")
         content_lines = qr_config.content.split("\n")[:3]
         for line in content_lines:

@@ -20,7 +20,7 @@
             requests
             feedparser
             icalendar
-            pytz
+            tzdata
             python-dateutil
             astral
             beautifulsoup4

@@ -2,7 +2,7 @@ import json
 from typing import Dict, Any, List
 from pathlib import Path
 from datetime import date, datetime
-from app.utils import wrap_text, wrap_text_pixels
+from app.utils import wrap_text_pixels
 from app.config import current_date
 from PIL import Image, ImageDraw
 from app.module_registry import register_module
@@ -28,11 +28,6 @@ def get_events_for_date(target_date: date) -> List[str]:
         return ["Offline history database is missing."]
     except Exception:
         return ["Error reading history database."]
-
-
-def get_events_for_today() -> List[str]:
-    """Reads events for the current date from the local database."""
-    return get_events_for_date(current_date())
 
 
 def _resolve_reference_date(config: Dict[str, Any] | None) -> date:

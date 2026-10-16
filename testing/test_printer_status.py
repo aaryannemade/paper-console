@@ -10,7 +10,8 @@ from PIL import Image
 
 import app.hardware as hardware
 import app.main as main
-from testing.test_printer_transport import _FakeSerial, _make_driver
+from app.drivers.print_outputs import ConsoleOutput
+from app.drivers.printer_raster import RasterPrinter
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +35,7 @@ def idle_printer(monkeypatch):
 def test_status_uses_shared_reservation_state(
     monkeypatch, printing, holding, available, reason
 ):
-    monkeypatch.setattr(main, "_printer_is_available", lambda: available)
+    monkeypatch.setattr(hardware, "printer_is_available", lambda: available)
     monkeypatch.setattr(hardware, "print_in_progress", printing)
     monkeypatch.setattr(hardware, "hold_action_in_progress", holding)
     monkeypatch.setattr(hardware, "hold_action_started_at", time.time())
@@ -42,7 +43,7 @@ def test_status_uses_shared_reservation_state(
 
 
 def test_stale_hold_expires_using_job_reservation_rules(monkeypatch):
-    monkeypatch.setattr(main, "_printer_is_available", lambda: True)
+    monkeypatch.setattr(hardware, "printer_is_available", lambda: True)
     monkeypatch.setattr(hardware, "hold_action_in_progress", True)
     monkeypatch.setattr(
         hardware, "hold_action_started_at",
@@ -55,15 +56,14 @@ def test_stale_hold_expires_using_job_reservation_rules(monkeypatch):
 def test_driver_availability_failure_is_unavailable(monkeypatch):
     class BrokenPrinter:
         def is_available(self):
-            raise OSError("serial disconnected")
+            raise OSError("output disconnected")
 
-    monkeypatch.setattr(main, "printer", BrokenPrinter())
+    monkeypatch.setattr(hardware, "printer", BrokenPrinter())
     assert main._read_printer_status() == {"ready": False, "reason": "unavailable"}
 
 
-def test_status_is_public_and_sends_no_serial_commands(monkeypatch):
-    serial = _FakeSerial()
-    driver = _make_driver(serial)
+def test_status_is_public_and_does_not_deliver_a_receipt(monkeypatch):
+    driver = RasterPrinter(output=ConsoleOutput())
     monkeypatch.setattr(main, "printer", driver)
 
     async def scenario():
@@ -89,18 +89,16 @@ def test_status_is_public_and_sends_no_serial_commands(monkeypatch):
         assert json.loads(body) == {"ready": True, "reason": "idle"}
 
     asyncio.run(scenario())
-    assert serial.written == b""
+    assert driver.print_buffer == []
 
 
 def test_status_during_flush_does_not_prevent_remote_cancellation(monkeypatch):
-    serial = _FakeSerial()
-    driver = _make_driver(serial)
-    driver.print_buffer = [("text", "status regression receipt")]
+    driver = RasterPrinter(output=ConsoleOutput())
+    driver.print_body("status regression receipt")
     driver.max_lines = 0
     driver._max_lines_hit = False
     driver.cutter_feed_dots = 0
     driver._render_unified_bitmap = lambda ops: Image.new("1", (384, 24), 1)
-    driver.wait_for_idle = lambda: None
     transmitting = threading.Event()
     cancelled_during_transport = []
 
@@ -122,7 +120,7 @@ def test_status_during_flush_does_not_prevent_remote_cancellation(monkeypatch):
         try:
             assert transmitting.wait(timeout=2)
             assert await main.get_printer_status() == {"ready": False, "reason": "printing"}
-            await main.debug_cancel_print()
+            assert hardware.request_print_cancel()
             # Cancellation is a request; the job stays reserved until cleanup.
             assert await main.get_printer_status() == {"ready": False, "reason": "printing"}
         finally:
@@ -134,4 +132,3 @@ def test_status_during_flush_does_not_prevent_remote_cancellation(monkeypatch):
         assert await main.get_printer_status() == {"ready": True, "reason": "idle"}
 
     asyncio.run(scenario())
-    assert serial.written == b""

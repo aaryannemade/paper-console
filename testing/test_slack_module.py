@@ -1,4 +1,3 @@
-import asyncio
 import types
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -512,7 +511,7 @@ async def test_reconcile_starts_stops_and_restarts_connections(monkeypatch):
     await slack_manager.reconcile()
     assert stopped == ["a", "a"]
     assert slack_manager.get_module_status("a")["status"] == "disconnected"
-    assert not slack_manager.has_active_instances()
+    assert not slack_manager._connections
 
 
 @pytest.mark.asyncio

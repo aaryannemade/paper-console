@@ -34,3 +34,7 @@ frontend-build:
 # Run the backend tests; accepts additional pytest arguments.
 test *args:
     python -m pytest -q testing "$@"
+
+# Validate every Python module's icon references against the bundled icons.
+icons:
+    python scripts/validate_icons.py

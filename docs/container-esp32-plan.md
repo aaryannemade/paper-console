@@ -78,7 +78,8 @@ Implement in two reviewable increments:
 - Remove WiFi router registration, captive portal detection/redirects, and setup
   receipts that advertise an AP or `pc-1.local`.
 - Remove WiFi setup screens, AP dialogs, status polling and their frontend imports.
-- Remove WiFi-specific quick actions and factory-reset hooks; retain application reset.
+- Remove host-specific reset hooks; restoring defaults is done by clearing the
+  stopped container's dedicated `/data` bind mount.
 - Delete the WiFi manager/helper once all application references are removed.
 - Adapt tests and UI snapshot fixtures to the new application startup flow.
 
@@ -93,11 +94,12 @@ WiFi receipts; channel printing and scheduling still work with mock output.
 - Keep an explicit application credential, independent of host identity/passwords.
 - Retain timezone as application configuration for receipt formatting and schedules;
   use the host-provided clock without modifying it.
-- Make settings reset affect only application data; revise system-monitor output
-  and health/status responses to describe the server rather than a Pi appliance.
+- Remove the application reset API/UI/gesture; the operator clears the stopped
+  container's `/data` bind mount to restore defaults. Describe app state in the
+  system-monitor output and health/status responses.
 
 Acceptance: application lifecycle and supported APIs do not call privileged host
-tools; login/logout, settings persistence/reset, timezone formatting and scheduling
+tools; login/logout, settings persistence, timezone formatting and scheduling
 have focused regression coverage.
 
 ## Step 3 — Replace local hardware with an HTTP-controlled print service (container side)
@@ -132,7 +134,7 @@ Increments:
   (`PC1_PRINT_CAPTURE_DIR`). Keep the full-print snapshot workflow working.
 - **3b — HTTP input events (implemented).** Add an authenticated input-event endpoint (position
   and button gestures, event IDs, duplicate rejection) that drives the existing
-  channel print, quick actions, cancel, factory reset, Adventure and app-picker
+  channel print, quick actions, cancel, Adventure and app-picker
   selection. Keep the current dial position server-side. Then remove the GPIO
   button/dial drivers, ioctl helper and their callbacks.
 - **3c — ESP32 relay transport (implemented).** Write `docs/relay-protocol.md`: registration and
@@ -201,10 +203,9 @@ window and shut down cleanly without boot prints, sudo prompts or AP retries.
 Step 1b result: `app/wifi_manager.py`, the WiFi router, captive-portal probe routes,
 setup/welcome/system-ready receipts, WiFi quick actions and the WiFi UI screens are
 removed. The SPA catch-all route is replaced by `/` so retired probe paths return
-404. Resets restore application settings only (no WiFi forget, password change or
-reboot). WiFi QR generation moved to `app/qr_payloads.py` for the QR module.
-System Monitor reports the outbound-interface IP instead of WiFi SSID. Verification:
-303 backend tests (obsolete WiFi/AP tests removed; route-absence, reset, QR and IP
+404. WiFi QR generation moved to `app/qr_payloads.py` for the QR module.
+System Monitor initially reported the outbound-interface IP instead of WiFi SSID; it now reports application, relay and `/data` state. Verification:
+303 backend tests (obsolete WiFi/AP tests removed; route-absence, QR and IP
 tests added), frontend lint/build, full print gallery (41 renders, 0 failures), and
 a live server smoke test (WiFi/probe routes 404, auth enforced, channel print works,
 no sudo/AP activity).
@@ -260,18 +261,20 @@ seed). Live: `just backend` console print through the Vite proxy, plus `esp32`
 and `usb` modes with no device (503, health stays healthy) and an invalid mode
 (startup fails).
 
-Known issue (pre-existing, unchanged): `max_print_lines` only counts legacy
-`text` ops, and content uses `styled` ops, so the length limit rarely applies.
-Console mode now matches the real printer here; the old mock counted every call.
+The post-migration cleanup measures rendered styled text and other receipt
+operations in dots for `max_print_lines`, stops after the module exceeding the
+limit, and truncates the receipt with a notice within the limit. Interactive
+receipt margins are now explicit per print job instead of depending on global
+selection mode while unrelated messages are rendering.
 
 Step 3b result: `POST /api/device/events` (`app/device_input.py`) accepts
 `position` (absolute 1–8) and `button` gesture events (`press`, `hold`,
-`hold_release`, `long_hold`, grouped by `press_id`), authenticated with the shared
+`hold_release`, grouped by `press_id`), authenticated with the shared
 bearer token from `PC1_RELAY_TOKEN`/`PC1_RELAY_TOKEN_FILE` (`app/relay_auth.py`;
 unset disables the endpoint with 503, invalid fails startup). Gesture timing is a
 firmware job; the container keeps the meaning: print channel, menu choice,
-cancel-by-hold (which consumes the rest of that press), Quick Actions and
-application reset. Retries with the same `event_id` return the original result
+cancel-by-hold (which consumes the rest of that press) and Quick Actions.
+Retries with the same `event_id` return the original result
 without acting again (last 256 ids). Busy/unavailable are reported as results;
 nothing is queued. The channel position is server-side state (`ChannelSelector`).
 Removed: GPIO button/dial drivers, the ioctl helper, the mock button/dial and

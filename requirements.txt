@@ -5,15 +5,12 @@ requests
 
 feedparser
 icalendar
-pytz
+tzdata
 python-dateutil
 astral
 beautifulsoup4
 croniter
 
-# Development printers: USB-to-serial adapters and native USB printer-class devices
-pyserial
-pyusb
 # Receipt QR rendering
 qrcode[pil]
 jsonschema

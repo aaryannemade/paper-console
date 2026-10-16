@@ -1,89 +1,28 @@
 """Shared utility functions for modules."""
 
-import socket
-from typing import Optional
+def wrap_text(text: str, width: int = 42, indent: int = 0) -> list[str]:
+    """Wrap text on whitespace to fit a character width, less any indentation.
 
-
-def get_primary_ip() -> Optional[str]:
-    """Return the address of the interface used for outbound traffic.
-
-    Connecting a UDP socket only selects a route; no packets are sent. Unlike
-    resolving the hostname, this avoids loopback answers such as 127.0.1.1.
+    Prefer printer.print_body()/print_text(), which wrap using font metrics.
+    Use this only when a layout needs character-based pre-wrapping.
     """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.connect(("192.0.2.1", 9))  # TEST-NET-1, never routed publicly
-        address = sock.getsockname()[0]
-    except OSError:
-        return None
-    finally:
-        sock.close()
-    return None if address.startswith("127.") or address == "0.0.0.0" else address
+    words = text.split()
+    lines = []
+    current_line = ""
+    available_width = width - indent
 
-def wrap_text(text: str, width: int = 42, indent: int = 0, preserve_line_breaks: bool = False) -> list[str]:
-    """Wraps text to fit the printer width with optional indentation.
-    
-    Note: For most use cases, you should pass text directly to printer.print_body()
-    or printer.print_text(), which will handle wrapping automatically using font
-    metrics (more accurate than character-based wrapping). Use this function only
-    when you need character-based pre-wrapping for specific layout requirements.
-    
-    Args:
-        text: The text to wrap
-        width: Maximum width for each line (in characters, approximate)
-        indent: Number of spaces to indent (reduces available width)
-        preserve_line_breaks: If True, preserves explicit line breaks from input
-    """
-    if preserve_line_breaks:
-        # Split by newlines first to preserve explicit line breaks and empty lines
-        input_lines = text.split('\n')
-        all_lines = []
-        
-        for input_line in input_lines:
-            # Check if this is an empty line (whitespace-only lines are also considered empty)
-            words = input_line.split()
-            
-            # If empty line, preserve it for spacing
-            if not words:
-                all_lines.append("")
-                continue
-            
-            # Wrap each non-empty line individually
-            current_line = ""
-            available_width = width - indent
-
-            for word in words:
-                if len(current_line) + len(word) + 1 <= available_width:
-                    current_line += word + " "
-                else:
-                    if current_line:
-                        all_lines.append(current_line.strip())
-                    current_line = word + " "
-
-            # Add the last line if there's content
+    for word in words:
+        if len(current_line) + len(word) + 1 <= available_width:
+            current_line += word + " "
+        else:
             if current_line:
-                all_lines.append(current_line.strip())
-        
-        return all_lines
-    else:
-        # Original behavior: split on all whitespace
-        words = text.split()
-        lines = []
-        current_line = ""
-        available_width = width - indent
+                lines.append(current_line.strip())
+            current_line = word + " "
 
-        for word in words:
-            if len(current_line) + len(word) + 1 <= available_width:
-                current_line += word + " "
-            else:
-                if current_line:
-                    lines.append(current_line.strip())
-                current_line = word + " "
+    if current_line:
+        lines.append(current_line.strip())
 
-        if current_line:
-            lines.append(current_line.strip())
-
-        return lines
+    return lines
 
 
 def wrap_text_pixels(

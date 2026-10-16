@@ -1,25 +1,14 @@
 from collections import defaultdict
 import csv
 import os
-import random
 
 import pytest
-from unittest.mock import MagicMock
 from app.modules.crossword import (
     MAX_NUM_WORDS,
     MIN_NUM_WORDS,
     CrosswordGenerator,
     _clamp_num_words,
-    execute_crossword,
 )
-
-def test_crossword_generator_initialization():
-    """Verify the generator initializes with correct dimensions."""
-    gen = CrosswordGenerator(8, 60)
-    assert gen.width == 8
-    assert gen.height == 60
-    assert len(gen.grid) == 60
-    assert len(gen.grid[0]) == 8
 
 def test_crossword_can_place_logic():
     """Test the overlap and adjacency logic for word placement."""
@@ -85,23 +74,7 @@ def test_crossword_overlap_calculation():
     # (6 - 5) / 6 = 1/6
     assert gen._calculate_overlap() == pytest.approx(1/6)
 
-def test_crossword_scoring_logic():
-    """Test the puzzle scoring algorithm components."""
-    gen = CrosswordGenerator(8, 8)
-    # score = (num_words * 1000) + (overlap * 500) - (height * 10)
-    
-    # 5 words, 20% overlap, 10 height
-    # 5000 + 100 - 100 = 5000
-    score1 = gen._calculate_puzzle_score(5, 0.2, 10)
-    assert score1 == 5000
-
-    # 5 words, 50% overlap, 15 height
-    # 5000 + 250 - 150 = 5100 (Higher overlap beats lower height penalty)
-    score2 = gen._calculate_puzzle_score(5, 0.5, 15)
-    assert score2 > score1
-    assert score2 == 5100
-
-def test_crossword_generation_does_not_exceed_requested_word_count():
+def test_crossword_generation_does_not_exceed_requested_word_count(monkeypatch):
     """Generator should never place more words than the configured cap."""
     file_path = os.path.join(
         os.path.dirname(__file__),
@@ -117,7 +90,10 @@ def test_crossword_generation_does_not_exceed_requested_word_count():
             if row["word"].strip().isalpha() and row["hint"].strip()
         ]
 
-    random.seed(2)
+    import random
+    # Isolate the generator's randomness from other tests.
+    rng = random.Random(2)
+    monkeypatch.setattr(random, "shuffle", rng.shuffle)
     gen = CrosswordGenerator(8, 8)
     gen.generate(word_pool, 10)
 

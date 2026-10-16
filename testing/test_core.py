@@ -1,9 +1,12 @@
 """Pytest suite for PC-1 core behaviors."""
 
+import types
+import importlib
 from datetime import datetime
 from unittest.mock import MagicMock
 
-import app.modules  # noqa: F401 - triggers module auto-registration
+import app.main as main_module
+importlib.import_module("app.modules")  # registers every module type
 from app.config import Settings, format_print_datetime
 from app.module_registry import get_all_modules, validate_module_config
 from app.modules.qrcode_print import format_qrcode_receipt
@@ -64,28 +67,6 @@ def test_open_wifi_qr_does_not_include_password():
     assert generate_wifi_qr_payload("Guest", "unused", security="NOPASS", hidden=True) == "WIFI:S:Guest;T:nopass;H:true;;"
 
 
-def test_primary_ip_ignores_loopback(monkeypatch):
-    import app.utils as utils
-
-    class FakeSocket:
-        def __init__(self, address):
-            self.address = address
-
-        def connect(self, _target):
-            return None
-
-        def getsockname(self):
-            return (self.address, 0)
-
-        def close(self):
-            return None
-
-    monkeypatch.setattr(utils.socket, "socket", lambda *a: FakeSocket("127.0.1.1"))
-    assert utils.get_primary_ip() is None
-    monkeypatch.setattr(utils.socket, "socket", lambda *a: FakeSocket("192.168.1.20"))
-    assert utils.get_primary_ip() == "192.168.1.20"
-
-
 def test_user_wifi_qr_module_still_prints_credentials():
     printer = MagicMock()
     format_qrcode_receipt(printer, {
@@ -93,3 +74,36 @@ def test_user_wifi_qr_module_still_prints_credentials():
     })
     assert printer.print_qr.call_args.kwargs["data"] == "WIFI:S:Guest;T:WPA;P:pass1234;;"
     printer.print_bold.assert_any_call("Guest")
+
+
+def test_execute_module_passes_instance_id_to_modules_that_accept_it(monkeypatch):
+    from app.config import ModuleInstance
+
+    captured = {}
+
+    def fake_execute(printer, config, module_name, module_id=None, scheduled=False):  # noqa: ARG001
+        captured["module_id"] = module_id
+        captured["module_name"] = module_name
+        captured["config"] = config
+        captured["scheduled"] = scheduled
+
+    monkeypatch.setattr(
+        main_module,
+        "get_module_def",
+        lambda module_type: types.SimpleNamespace(execute_fn=fake_execute),
+    )
+
+    module = ModuleInstance(
+        id="adventure-one",
+        type="adventure",
+        name="Cave Run",
+        config={"reset_game": False},
+    )
+
+    assert main_module.execute_module(module, scheduled=True) is True
+    assert captured == {
+        "module_id": "adventure-one",
+        "module_name": "Cave Run",
+        "config": {"reset_game": False},
+        "scheduled": True,
+    }

@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, Response
 from contextlib import asynccontextmanager
 import asyncio
 import uuid
+import importlib
 import os
 import hashlib
 import json
@@ -12,8 +13,7 @@ from typing import Dict, Optional, List
 from datetime import datetime, timedelta
 from pathlib import Path
 from pydantic import BaseModel
-import subprocess
-import pytz
+from zoneinfo import ZoneInfo
 import logging
 import time
 
@@ -70,7 +70,6 @@ from app.config import (
     settings,
     Settings,
     save_config,
-    load_config,
     WebhookConfig,
     TextConfig,
     CalendarConfig,
@@ -79,7 +78,6 @@ from app.config import (
     ChannelModuleAssignment,
     ChannelConfig,
     ScheduleRule,
-    PRINTER_WIDTH,
     current_datetime,
 )
 from app.schedule_utils import (
@@ -91,18 +89,16 @@ from app.schedule_utils import (
 )
 
 # Import modules package to trigger auto-discovery and registration
-import app.modules  # noqa: F401
+importlib.import_module("app.modules")
 
 # Import module registry for dynamic dispatch
 from app.module_registry import (
     get_module as get_module_def,
-    get_all_modules,
     list_module_types,
-    is_registered,
     validate_module_config,
 )
 
-# Legacy imports for modules with special handling (can be removed after full migration)
+# Some modules need custom dispatch (email, webhooks, text, calendar and weather).
 from app.modules import email_client, webhook, text, calendar, weather
 import app.print_webhook_service as print_webhook_service
 
@@ -123,6 +119,7 @@ from app.hardware import (
 )
 import app.location_lookup as location_lookup
 import app.slack_manager as slack_manager
+from app.version import read_version
 
 # --- BACKGROUND TASKS ---
 
@@ -144,24 +141,9 @@ WEATHER_PREFETCH_RETRY_SECONDS = 30
 _weather_prefetch_state: Dict[str, Dict[str, object]] = {}
 
 
-def _printer_is_available() -> bool:
-    """Best-effort hardware printer availability check."""
-    if not printer:
-        return False
-    checker = getattr(printer, "is_available", None)
-    if callable(checker):
-        try:
-            return bool(checker())
-        except Exception:
-            logger.debug("Printer availability probe failed", exc_info=True)
-            return False
-    # Mock drivers generally have no explicit availability method.
-    return True
-
-
 def _require_printer_available():
     """Reject a print request up front when the output cannot take it (no queue)."""
-    if not _printer_is_available():
+    if not hardware.printer_is_available():
         mode = getattr(printer, "output_mode", "unknown")
         raise HTTPException(
             status_code=503, detail=f"Printer unavailable (output: {mode})"
@@ -171,8 +153,8 @@ def _require_printer_available():
 def _read_printer_status() -> Dict[str, object]:
     """Report logical job readiness without sending commands to the printer.
 
-    Serial status queries take the same I/O lock held throughout a receipt.
-    Polling it here would block the event loop, including remote cancellation.
+    Printer I/O can hold the output lock throughout a receipt. Polling it
+    here would block the event loop, including remote cancellation.
     The reservation stays active through transport completion/cancellation.
     """
     with hardware.print_lock:
@@ -180,7 +162,7 @@ def _read_printer_status() -> Dict[str, object]:
         print_in_progress = bool(hardware.print_in_progress)
         hold_action_in_progress = bool(hardware.hold_action_in_progress)
 
-    available = _printer_is_available()
+    available = hardware.printer_is_available()
     if not available:
         reason = "unavailable"
     elif print_in_progress:
@@ -538,7 +520,7 @@ def handle_button_press() -> str:
     """Short press: choose in the active menu, otherwise print the current channel."""
     from app.selection_mode import can_handle_selection, is_selection_mode_active
 
-    if not _printer_is_available():
+    if not hardware.printer_is_available():
         return "printer_unavailable"
     if not try_begin_print_job(debounce=True):
         return "busy"
@@ -586,10 +568,10 @@ async def handle_selection_async(dial_position: int):
 def handle_button_hold() -> str:
     """5 s reached while held: cancel the active print, or arm Quick Actions."""
     # While a receipt is active, this gesture cancels it. The device input
-    # processor then ignores the rest of this press (release / 15 s hold).
+    # processor then ignores the release of this press.
     if request_print_cancel():
         return "cancel_requested"
-    if not _printer_is_available():
+    if not hardware.printer_is_available():
         return "printer_unavailable"
     if not reserve_hold_action():
         return "busy"
@@ -606,7 +588,7 @@ def handle_button_hold() -> str:
 
 def _begin_hold_action() -> Optional[str]:
     """Turn the armed hold into a print job; return an outcome on failure."""
-    if not _printer_is_available():
+    if not hardware.printer_is_available():
         clear_print_reservation()
         return "printer_unavailable"
     if not promote_hold_to_print_job() and not try_begin_print_job(debounce=False):
@@ -618,7 +600,7 @@ def _begin_hold_action() -> Optional[str]:
 
 
 def handle_button_hold_release() -> str:
-    """Released between 5 and 15 s: print the Quick Actions menu."""
+    """Released after a hold: print the Quick Actions menu."""
     failure = _begin_hold_action()
     if failure:
         return failure
@@ -629,49 +611,6 @@ def handle_button_hold_release() -> str:
         clear_print_reservation()
         return "error"
     return "quick_actions"
-
-
-def _print_channel_config_summary(position: int):
-    """Print a summary of the currently selected channel configuration."""
-    if hasattr(printer, "reset_buffer"):
-        max_lines = getattr(settings, "max_print_lines", 200)
-        printer.reset_buffer(max_lines)
-
-    printer.print_header(f"CHANNEL {position}", icon="list")
-    printer.print_line()
-
-    channel = settings.channels.get(position)
-    if not channel or not channel.modules:
-        printer.print_body("This channel is empty.")
-        printer.print_caption("Use web settings to add modules.")
-    else:
-        sorted_assignments = sorted(channel.modules, key=lambda m: m.order)
-        printer.print_caption("Assigned modules:")
-        for idx, assignment in enumerate(sorted_assignments, start=1):
-            module = settings.modules.get(assignment.module_id)
-            module_name = module.name if module else "(missing module)"
-            printer.print_body(f"  {idx}. {module_name}")
-
-        schedule_lines = _schedule_preview_lines(channel, limit=8)
-        if schedule_lines:
-            printer.feed(1)
-            printer.print_caption("Schedule:")
-            for schedule_line in schedule_lines:
-                printer.print_body(f"  - {schedule_line}")
-            total_rules = len(_channel_schedule_rules(channel))
-            if total_rules > len(schedule_lines):
-                printer.print_caption(f"  +{total_rules - len(schedule_lines)} more")
-        else:
-            printer.feed(1)
-            printer.print_caption("Schedule: none")
-
-    printer.print_line()
-    printer.print_caption("Open settings in your browser")
-    printer.print_caption("to edit this channel.")
-    printer.feed(1)
-
-    if hasattr(printer, "flush_buffer"):
-        printer.flush_buffer()
 
 
 def _write_channel_overview_compact():
@@ -699,7 +638,6 @@ def _write_long_press_menu_compact(position: int):
     printer.print_caption(f"Dial: {position}")
     printer.print_body("[1] Table of contents")
     printer.print_body("[2] System monitor")
-    printer.print_body("[5] Reset Factory Settings")
     printer.print_caption("[8] Cancel")
     printer.print_caption("Turn dial, press button")
 
@@ -712,37 +650,6 @@ def _print_system_monitor():
     from app.modules.system_monitor import format_system_monitor_receipt
 
     format_system_monitor_receipt(printer, {}, "SYSTEM MONITOR")
-    if hasattr(printer, "flush_buffer"):
-        printer.flush_buffer()
-
-
-def _print_current_channel_and_menu(position: int):
-    """Print current channel details + quick menu in one print job."""
-    if hasattr(printer, "reset_buffer"):
-        max_lines = getattr(settings, "max_print_lines", 200)
-        printer.reset_buffer(max_lines)
-    channel = settings.channels.get(position)
-
-    printer.print_header(f"CHANNEL {position}", icon="list")
-    if not channel or not channel.modules:
-        printer.print_body("This channel is empty.")
-        printer.print_caption("Use web settings to add modules.")
-    else:
-        sorted_assignments = sorted(channel.modules, key=lambda m: m.order)
-        for idx, assignment in enumerate(sorted_assignments, start=1):
-            module = settings.modules.get(assignment.module_id)
-            module_name = module.name if module else "(missing module)"
-            printer.print_body(f"{idx}. {module_name}")
-        schedule_lines = _schedule_preview_lines(channel, limit=2)
-        if schedule_lines:
-            printer.print_caption("Schedule: " + "; ".join(schedule_lines))
-            total_rules = len(_channel_schedule_rules(channel))
-            if total_rules > len(schedule_lines):
-                printer.print_caption(f"+{total_rules - len(schedule_lines)} more rules")
-        else:
-            printer.print_caption("Schedule: none")
-
-    _write_long_press_menu_compact(position)
     if hasattr(printer, "flush_buffer"):
         printer.flush_buffer()
 
@@ -763,95 +670,12 @@ def _print_long_press_menu(position: int):
     if hasattr(printer, "reset_buffer"):
         max_lines = getattr(settings, "max_print_lines", 200)
         printer.reset_buffer(max_lines)
+    if hasattr(printer, "set_selection_indicator"):
+        printer.set_selection_indicator()
     _write_long_press_menu_compact(position)
 
     if hasattr(printer, "flush_buffer"):
         printer.flush_buffer()
-
-
-def _confirm_quick_factory_reset(printer, module_id: str):
-    """Show the Quick Actions factory reset confirmation receipt."""
-    from app.selection_mode import enter_selection_mode, exit_selection_mode
-
-    printer.print_header("FACTORY RESET", icon="alert")
-    printer.print_line()
-    printer.print_bold("WARNING")
-    printer.print_body("")
-    printer.print_body("This will delete ALL")
-    printer.print_body("application settings.")
-    printer.print_body("")
-    printer.print_body("Module configurations")
-    printer.print_body("and channels")
-    printer.print_body("will be erased.")
-    printer.print_line()
-    printer.print_subheader("ARE YOU SURE?")
-    printer.feed(1)
-    printer.print_body("  [1] Yes, Reset Everything")
-    printer.print_caption("  [8] Cancel")
-    printer.print_line()
-
-    if hasattr(printer, "flush_buffer"):
-        printer.flush_buffer()
-
-    def _handle_reset_confirmation(dial_position: int):
-        from app.hardware import printer as hw_printer
-
-        exit_selection_mode()
-        if dial_position == 1:
-            _do_quick_factory_reset(hw_printer)
-            return
-
-        if hasattr(hw_printer, "reset_buffer"):
-            hw_printer.reset_buffer()
-
-        hw_printer.print_header("QUICK ACTIONS", icon="settings")
-        hw_printer.print_body("Factory reset cancelled.")
-        hw_printer.print_line()
-        hw_printer.feed(1)
-
-        if hasattr(hw_printer, "flush_buffer"):
-            hw_printer.flush_buffer()
-
-    enter_selection_mode(
-        _handle_reset_confirmation,
-        f"{module_id}-reset-confirm",
-        valid_positions={1, 8},
-    )
-
-
-def _reset_application_settings():
-    """Reset persisted and live settings without changing the host or credentials."""
-    global settings
-    from app.factory_reset import perform_factory_reset
-    import app.config as config_module
-
-    result = perform_factory_reset()
-    if result["config_cleared"]:
-        settings = config_module.settings
-        if global_loop and global_loop.is_running():
-            asyncio.run_coroutine_threadsafe(slack_manager.reconcile(), global_loop)
-    return result
-
-
-def _do_quick_factory_reset(printer):
-    """Perform a confirmed factory reset from Quick Actions."""
-
-    printer.print_header("RESETTING...", icon="alert")
-    printer.print_line()
-    printer.print_body("Clearing all settings...")
-    printer.print_body("Server will stay running.")
-    printer.print_line()
-    printer.feed(1)
-
-    if hasattr(printer, "flush_buffer"):
-        printer.flush_buffer()
-
-    result = _reset_application_settings()
-    if not result.get("config_cleared", False):
-        logger.error(
-            "Application settings reset failed: %s",
-            "; ".join(result.get("errors", [])),
-        )
 
 
 async def long_press_menu_trigger():
@@ -902,14 +726,6 @@ async def long_press_menu_trigger():
             _print_system_monitor()
             return
 
-        if dial_position == 5:
-            exit_selection_mode()
-            try:
-                _confirm_quick_factory_reset(hw_printer, "quick-factory-reset")
-            except Exception:
-                logger.exception("Failed to open factory reset confirmation")
-            return
-
         # Empty dial slots are ignored to avoid wasting paper.
         return
 
@@ -917,7 +733,7 @@ async def long_press_menu_trigger():
     enter_selection_mode(
         _handle_quick_action,
         quick_actions_id,
-        valid_positions={1, 2, 5, 8},
+        valid_positions={1, 2, 8},
     )
     # Release lock only after quick-actions selection mode is fully active.
     clear_print_reservation(clear_hold=False)
@@ -950,86 +766,10 @@ async def long_press_menu_trigger():
     asyncio.create_task(_auto_exit_quick_actions_after_timeout(quick_actions_id))
 
 
-async def factory_reset_trigger():
-    """Reset application settings (button hold 15+ seconds).
-    Runs blocking printer operations in a thread pool to avoid blocking the event loop.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    from app.selection_mode import exit_selection_mode
-
-    exit_selection_mode()
-
-    def _print_reset_message():
-        # Start from a clean transport state before sending reset notice.
-        if hasattr(printer, "clear_hardware_buffer"):
-            printer.clear_hardware_buffer()
-        # Reset printer buffer
-        if hasattr(printer, "reset_buffer"):
-            printer.reset_buffer()
-
-        # Print factory reset message
-        printer.feed(1)
-        printer.print_text("=" * 32)
-        printer.print_text("")
-        printer.print_text("     FACTORY RESET")
-        printer.print_text("")
-        printer.print_text("  All settings will be")
-        printer.print_text("  cleared. Server will")
-        printer.print_text("  stay running.")
-        printer.print_text("")
-        printer.print_text("=" * 32)
-        printer.feed(2)
-
-        # Flush buffer to print (spacing is built into bitmap)
-        if hasattr(printer, "flush_buffer"):
-            printer.flush_buffer()
-
-    try:
-        # Run blocking printer operations in thread pool to avoid blocking event loop
-        try:
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor() as executor:
-                await loop.run_in_executor(executor, _print_reset_message)
-        except Exception:
-            logger.warning(
-                "Factory reset receipt failed to print",
-                exc_info=True,
-            )  # Continue reset flow even if print fails
-
-        # Wait for print to complete
-        await asyncio.sleep(3)
-
-        reset_result = _reset_application_settings()
-        if not reset_result.get("config_cleared", False):
-            logger.error(
-                "Application settings reset failed: %s",
-                "; ".join(reset_result.get("errors", [])),
-            )
-    finally:
-        clear_print_reservation()
-
-
-def handle_button_long_hold() -> str:
-    """15 s reached while held: reset application settings."""
-    failure = _begin_hold_action()
-    if failure:
-        if failure == "busy":
-            logger.info("Ignoring factory reset hold because printer is already busy.")
-        return failure
-    try:
-        asyncio.run_coroutine_threadsafe(factory_reset_trigger(), global_loop)
-    except Exception:
-        logger.exception("Failed to schedule factory reset")
-        clear_print_reservation()
-        return "error"
-    return "factory_reset"
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     global email_polling_task, scheduler_task, task_monitor_task, global_loop
-    from concurrent.futures import ThreadPoolExecutor
 
     # Capture the running loop
     global_loop = asyncio.get_running_loop()
@@ -1048,21 +788,7 @@ async def lifespan(app: FastAPI):
             "%s is not set; device input events are disabled.", relay_auth.TOKEN_ENV
         )
 
-    # Clear printer hardware buffer first to prevent startup garbage
-    # Run in thread pool to avoid blocking event loop
-    def _init_printer():
-        if hasattr(printer, "clear_hardware_buffer"):
-            printer.clear_hardware_buffer()
-
-    try:
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            await loop.run_in_executor(executor, _init_printer)
-    except Exception:
-        logger.exception(
-            "Printer startup initialization failed (continuing without blocking startup)"
-        )
-    if not _printer_is_available():
+    if not hardware.printer_is_available():
         logger.warning(
             "Printer output %r is unavailable at startup; prints are skipped until it is reachable.",
             getattr(printer, "output_mode", "unknown"),
@@ -1089,7 +815,6 @@ async def lifespan(app: FastAPI):
         press=lambda: handle_button_press(),
         hold=lambda: handle_button_hold(),
         hold_release=lambda: handle_button_hold_release(),
-        long_hold=lambda: handle_button_long_hold(),
     )
 
     yield
@@ -1135,27 +860,6 @@ app.add_middleware(
 )
 
 # --- CORE API ---
-
-
-@app.get("/api/system/status")
-async def read_root():
-    pos = dial.read_position()
-    channel = settings.channels.get(pos)
-    module_info = "unknown"
-    if channel:
-        if channel.modules:
-            module_info = f"{len(channel.modules)} module(s)"
-        elif channel.type:
-            module_info = channel.type
-
-    return {
-        "status": "online",
-        "app": "PC-1",
-        "version": "v1.0",
-        "configured_timezone": settings.timezone,
-        "current_channel": pos,
-        "current_module": module_info,
-    }
 
 
 @app.get("/api/printer/status")
@@ -1236,7 +940,7 @@ async def health_check():
 
     # Check hardware drivers
     health["components"]["printer"] = (
-        "available" if _printer_is_available() else "unavailable"
+        "available" if hardware.printer_is_available() else "unavailable"
     )
     health["components"]["printer_output"] = getattr(printer, "output_mode", "unknown")
     health["components"]["device_input"] = (
@@ -1266,21 +970,6 @@ async def health_check():
         health["issues"] = critical_issues
 
     return health
-
-
-@app.get("/status")
-async def get_status():
-    """Returns the current state of the device."""
-    pos = dial.read_position()
-    channel = settings.channels.get(pos)
-    module_info = "unknown"
-    if channel:
-        if channel.modules:
-            module_info = f"{len(channel.modules)} module(s)"
-        elif channel.type:
-            module_info = channel.type
-
-    return {"state": "idle", "current_channel": pos, "current_module": module_info}
 
 
 # --- SETTINGS API ---
@@ -1412,141 +1101,7 @@ async def import_settings(
     return response
 
 
-@app.post("/api/settings/reset", dependencies=[Depends(require_admin_access)])
-async def reset_settings(background_tasks: BackgroundTasks):
-    """Resets all settings to their default values."""
-    result = await asyncio.to_thread(_reset_application_settings)
-    if not result["config_cleared"]:
-        raise HTTPException(status_code=500, detail="Could not reset application settings")
-    return {"message": "Settings reset to defaults", "config": settings, "warnings": result["errors"]}
-
-
-@app.post("/api/settings/reload", dependencies=[Depends(require_admin_access)])
-async def reload_settings():
-    """Reloads settings from config.json on disk."""
-    global settings
-    import app.config as config_module
-
-    new_settings = load_config()
-
-    # Update in-memory globals
-    settings = new_settings
-    config_module.settings = settings
-
-    asyncio.create_task(slack_manager.reconcile())
-
-    return {"message": "Settings reloaded from disk", "config": settings}
-
-
 # --- SYSTEM TIME API ---
-
-
-def _read_system_timezone_info() -> Dict[str, Optional[str] | bool]:
-    """Best-effort lookup of the container's timezone (no host tools)."""
-    try:
-        timezone = os.environ.get("TZ")
-        if timezone:
-            return {
-                "timezone": timezone,
-                "found": True,
-            }
-
-        try:
-            with open("/etc/timezone", encoding="utf-8") as f:
-                timezone = f.read().strip()
-                if timezone:
-                    return {"timezone": timezone, "found": True}
-        except OSError:
-            logger.debug("Container timezone file unavailable", exc_info=True)
-
-        return {
-            "timezone": None,
-            "found": False,
-            "message": "Could not detect system timezone",
-        }
-    except Exception as e:
-        return {
-            "timezone": None,
-            "found": False,
-            "error": str(e),
-        }
-
-
-@app.get("/api/system/timezone")
-async def get_system_timezone():
-    """
-    Get the current system timezone.
-    """
-    return _read_system_timezone_info()
-
-
-@app.get("/api/system/timezone/list")
-async def list_timezones():
-    """
-    Get a list of available timezones.
-    Returns common US timezones and a few others.
-    """
-    # Common timezones organized by region
-    timezones = {
-        "US Eastern": [
-            "America/New_York",
-            "America/Detroit",
-            "America/Indiana/Indianapolis",
-            "America/Indiana/Vevay",
-            "America/Indiana/Vincennes",
-            "America/Indiana/Winamac",
-            "America/Kentucky/Louisville",
-            "America/Kentucky/Monticello",
-        ],
-        "US Central": [
-            "America/Chicago",
-            "America/Indiana/Knox",
-            "America/Indiana/Tell_City",
-            "America/Menominee",
-            "America/North_Dakota/Center",
-            "America/North_Dakota/New_Salem",
-            "America/North_Dakota/Beulah",
-        ],
-        "US Mountain": [
-            "America/Denver",
-            "America/Boise",
-        ],
-        "US Arizona": [
-            "America/Phoenix",
-        ],
-        "US Pacific": [
-            "America/Los_Angeles",
-            "America/Anchorage",
-            "America/Juneau",
-            "America/Sitka",
-            "America/Metlakatla",
-            "America/Yakutat",
-            "America/Nome",
-        ],
-        "US Territories": [
-            "Pacific/Honolulu",
-            "America/Puerto_Rico",
-            "America/St_Thomas",
-            "Pacific/Guam",
-            "Pacific/Saipan",
-            "Pacific/Pago_Pago",
-        ],
-        "Other": [
-            "UTC",
-            "Europe/London",
-            "Europe/Paris",
-            "Asia/Tokyo",
-            "Australia/Sydney",
-        ],
-    }
-
-    # Flatten into a simple list with labels
-    timezone_list = []
-    for region, tz_list in timezones.items():
-        for tz in tz_list:
-            timezone_list.append({"value": tz, "label": tz, "region": region})
-
-    return {"timezones": timezone_list}
 
 
 @app.get("/api/system/time")
@@ -1558,7 +1113,7 @@ async def get_system_time():
     try:
         from app.config import format_time
 
-        tz = pytz.timezone(settings.timezone)
+        tz = ZoneInfo(settings.timezone)
         now = datetime.now(tz)
 
         # Format time according to user's preference
@@ -1580,7 +1135,7 @@ async def get_system_time():
         # Fallback to UTC if timezone is invalid
         from app.config import format_time
 
-        now = datetime.now(pytz.UTC)
+        now = datetime.now(ZoneInfo("UTC"))
         time_formatted = format_time(now, settings.time_format)
         date_str = now.strftime("%Y-%m-%d")
         formatted = f"{date_str} {time_formatted}"
@@ -1610,335 +1165,21 @@ async def get_current_version():
 
     Updates are delivered by replacing the container image, not installed in place.
     """
-    project_root = _get_project_root()
-    version_file = project_root / ".version"
-    try:
-        version_text = version_file.read_text(encoding="utf-8").strip()
-        if version_text:
-            return {"version": version_text}
-    except OSError:
-        pass
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return {"version": result.stdout.strip()}
-    except (OSError, subprocess.SubprocessError):
-        logger.debug("git version lookup failed", exc_info=True)
-    return {"version": "unknown"}
+    return {"version": read_version(_get_project_root())}
 
 
 # --- LOCATION SEARCH API ---
 
 
-@app.get("/api/location/system-default")
-async def get_system_default_location():
-    """
-    Suggest a location based on the container's timezone.
-    """
-    try:
-        system_timezone = _read_system_timezone_info()["timezone"]
-
-        if not system_timezone:
-            return {
-                "found": False,
-                "message": "Could not detect system timezone",
-            }
-
-        # Find a default location for this timezone
-        # Use major cities in each timezone as defaults
-        timezone_to_default_location = {
-            "America/New_York": {"city": "New York", "state": "NY", "zipcode": "10001"},
-            "America/Chicago": {"city": "Chicago", "state": "IL", "zipcode": "60601"},
-            "America/Denver": {"city": "Denver", "state": "CO", "zipcode": "80201"},
-            "America/Phoenix": {"city": "Phoenix", "state": "AZ", "zipcode": "85001"},
-            "America/Los_Angeles": {
-                "city": "Los Angeles",
-                "state": "CA",
-                "zipcode": "90001",
-            },
-            "America/Anchorage": {
-                "city": "Anchorage",
-                "state": "AK",
-                "zipcode": "99501",
-            },
-            "Pacific/Honolulu": {"city": "Honolulu", "state": "HI", "zipcode": "96801"},
-            "America/Puerto_Rico": {
-                "city": "San Juan",
-                "state": "PR",
-                "zipcode": "00901",
-            },
-        }
-
-        # Try exact match first
-        default = timezone_to_default_location.get(system_timezone)
-
-        # If no exact match, try to find any location in the timezone
-        if not default:
-            # Search for locations in the timezone by looking up a common city
-            # We'll use the timezone name to infer a location
-            timezone_parts = system_timezone.split("/")
-            if len(timezone_parts) >= 2:
-                location_name = timezone_parts[-1].replace("_", " ")
-                # Try searching for the location name
-                results = location_lookup.search_locations(location_name, limit=1)
-                if results:
-                    result = results[0]
-                    return {
-                        "found": True,
-                        "timezone": system_timezone,
-                        "location": {
-                            "name": result["name"],
-                            "city": result["city"],
-                            "state": result["state"],
-                            "zipcode": result["zipcode"],
-                            "latitude": result["latitude"],
-                            "longitude": result["longitude"],
-                            "timezone": result["timezone"],
-                        },
-                    }
-
-            return {
-                "found": False,
-                "timezone": system_timezone,
-                "message": f"Found timezone {system_timezone} but no default location available",
-            }
-
-        # Get full location details for the default
-        location_result = location_lookup.get_location_by_zip(default["zipcode"])
-        if location_result:
-            return {
-                "found": True,
-                "timezone": system_timezone,
-                "location": {
-                    "name": location_result["name"],
-                    "city": location_result["city"],
-                    "state": location_result["state"],
-                    "zipcode": location_result["zipcode"],
-                    "latitude": location_result["latitude"],
-                    "longitude": location_result["longitude"],
-                    "timezone": location_result["timezone"],
-                },
-            }
-        else:
-            # Fallback: create location from default data
-            state = default["state"]
-
-            # Import the constants from location_lookup
-            from app.location_lookup import STATE_TO_TIMEZONE, STATE_COORDINATES
-
-            # Get timezone and coordinates from state
-            timezone = STATE_TO_TIMEZONE.get(state, "America/New_York")
-            coords = STATE_COORDINATES.get(state, (40.7128, -74.0060))
-            lat, lon = coords
-
-            return {
-                "found": True,
-                "timezone": system_timezone,
-                "location": {
-                    "name": default["city"],
-                    "city": default["city"],
-                    "state": state,
-                    "zipcode": default["zipcode"],
-                    "latitude": lat,
-                    "longitude": lon,
-                    "timezone": timezone,
-                },
-            }
-
-    except Exception as e:
-        return {
-            "found": False,
-            "error": str(e),
-            "message": "Error detecting system location",
-        }
-
-
 @app.get("/api/location/search")
-async def search_location(q: str, limit: int = 20, use_api: Optional[str] = None):
-    """
-    Search for locations by city name using the local GeoNames database.
-    Returns location data with timezone and coordinates.
-    """
+async def search_location(q: str, limit: int = 20):
+    """Search the bundled offline GeoNames database by city name."""
     if not q or len(q.strip()) < 2:
         return {"results": []}
 
-    query = q.strip()
-    results = []
-
-    # Check if API is requested (default to False - always use local database)
-    use_api_enabled = False
-    if use_api is not None:
-        use_api_enabled = (
-            use_api.lower() == "true" if isinstance(use_api, str) else bool(use_api)
-        )
-
-    # Try API first if explicitly requested (for future use or testing)
-    if use_api_enabled:
-        try:
-            import requests
-            import time
-            from concurrent.futures import ThreadPoolExecutor
-
-            # Use Nominatim API (free, no API key required)
-            # Rate limit: 1 request per second - we'll respect this
-            nominatim_url = "https://nominatim.openstreetmap.org/search"
-            params = {
-                "q": query,
-                "format": "json",
-                "limit": limit,
-                "addressdetails": 1,
-                "countrycodes": "us",  # Focus on US locations
-            }
-            headers = {
-                "User-Agent": "Paper-Console/1.0 (PC-1 Thermal Printer)",  # Required by Nominatim
-            }
-
-            # Run blocking network request in thread pool to avoid blocking event loop
-            def _fetch_location_api():
-                return requests.get(
-                    nominatim_url, params=params, headers=headers, timeout=3
-                )
-
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor() as executor:
-                response = await loop.run_in_executor(executor, _fetch_location_api)
-
-            if response.status_code == 200:
-                api_results = response.json()
-                if api_results:
-                    # Convert Nominatim results to our format
-                    for item in api_results:
-                        address = item.get("address", {})
-                        city = (
-                            address.get("city")
-                            or address.get("town")
-                            or address.get("village")
-                            or address.get("municipality")
-                            or ""
-                        )
-                        # Nominatim provides state_code (2-letter) or state (full name)
-                        state = address.get("state_code", "") or address.get(
-                            "state", ""
-                        )
-                        zipcode = address.get("postcode", "")
-
-                        # Convert full state name to abbreviation if needed
-                        if state and len(state) > 2:
-                            # Map common full state names to abbreviations
-                            state_name_to_code = {
-                                "Alabama": "AL",
-                                "Alaska": "AK",
-                                "Arizona": "AZ",
-                                "Arkansas": "AR",
-                                "California": "CA",
-                                "Colorado": "CO",
-                                "Connecticut": "CT",
-                                "Delaware": "DE",
-                                "Florida": "FL",
-                                "Georgia": "GA",
-                                "Hawaii": "HI",
-                                "Idaho": "ID",
-                                "Illinois": "IL",
-                                "Indiana": "IN",
-                                "Iowa": "IA",
-                                "Kansas": "KS",
-                                "Kentucky": "KY",
-                                "Louisiana": "LA",
-                                "Maine": "ME",
-                                "Maryland": "MD",
-                                "Massachusetts": "MA",
-                                "Michigan": "MI",
-                                "Minnesota": "MN",
-                                "Mississippi": "MS",
-                                "Missouri": "MO",
-                                "Montana": "MT",
-                                "Nebraska": "NE",
-                                "Nevada": "NV",
-                                "New Hampshire": "NH",
-                                "New Jersey": "NJ",
-                                "New Mexico": "NM",
-                                "New York": "NY",
-                                "North Carolina": "NC",
-                                "North Dakota": "ND",
-                                "Ohio": "OH",
-                                "Oklahoma": "OK",
-                                "Oregon": "OR",
-                                "Pennsylvania": "PA",
-                                "Rhode Island": "RI",
-                                "South Carolina": "SC",
-                                "South Dakota": "SD",
-                                "Tennessee": "TN",
-                                "Texas": "TX",
-                                "Utah": "UT",
-                                "Vermont": "VT",
-                                "Virginia": "VA",
-                                "Washington": "WA",
-                                "West Virginia": "WV",
-                                "Wisconsin": "WI",
-                                "Wyoming": "WY",
-                                "District of Columbia": "DC",
-                                "Puerto Rico": "PR",
-                                "Virgin Islands": "VI",
-                                "Guam": "GU",
-                                "American Samoa": "AS",
-                                "Northern Mariana Islands": "MP",
-                            }
-                            state = state_name_to_code.get(
-                                state, state[:2].upper() if len(state) >= 2 else ""
-                            )
-
-                        # Only include US locations with city and valid 2-letter state code
-                        if city and state and len(state) == 2:
-                            # Get timezone from state
-                            from app.location_lookup import (
-                                STATE_TO_TIMEZONE,
-                                STATE_COORDINATES,
-                            )
-
-                            timezone = STATE_TO_TIMEZONE.get(state, "America/New_York")
-                            coords = STATE_COORDINATES.get(state, (40.7128, -74.0060))
-
-                            # Use actual coordinates from API
-                            lat = float(item.get("lat", coords[0]))
-                            lon = float(item.get("lon", coords[1]))
-
-                            display_name = f"{city}, {state}"
-                            if zipcode:
-                                display_name = f"{city}, {state} {zipcode}"
-
-                            result = {
-                                "id": f"{zipcode}-{city}-{state}-{item.get('place_id', '')}",
-                                "name": display_name,
-                                "zipcode": zipcode,
-                                "city": city,
-                                "state": state,
-                                "latitude": lat,
-                                "longitude": lon,
-                                "timezone": timezone,
-                            }
-                            results.append(result)
-
-                            if len(results) >= limit:
-                                break
-
-                    if results:
-                        return {"results": results, "source": "api"}
-        except Exception as e:
-            # API failed, fall back to local database
-            print(f"Location API search failed: {e}, falling back to local database")
-
-    # Fall back to local database (works offline)
-    local_results = location_lookup.search_locations(query, limit=limit)
+    local_results = location_lookup.search_locations(q.strip(), limit=limit)
     if local_results:
         return {"results": local_results, "source": "local"}
-
     return {"results": [], "source": "none"}
 
 
@@ -2020,7 +1261,6 @@ def _convert_and_resize_image_module_config(module: ModuleInstance) -> None:
 @app.post("/api/modules", dependencies=[Depends(require_admin_access)])
 async def create_module(module: ModuleInstance, background_tasks: BackgroundTasks):
     """Create a new module instance."""
-    global settings
 
     # If no ID provided, generate one
     if not module.id:
@@ -2059,7 +1299,6 @@ async def update_module(
     module_id: str, module: ModuleInstance, background_tasks: BackgroundTasks
 ):
     """Update a module instance."""
-    global settings
     import app.config as config_module
 
     if module_id not in settings.modules:
@@ -2089,7 +1328,6 @@ async def update_module(
 @app.delete("/api/modules/{module_id}", dependencies=[Depends(require_admin_access)])
 async def delete_module(module_id: str, background_tasks: BackgroundTasks):
     """Delete a module instance."""
-    global settings
 
     if module_id not in settings.modules:
         raise HTTPException(status_code=404, detail="Module not found")
@@ -2115,29 +1353,6 @@ async def delete_module(module_id: str, background_tasks: BackgroundTasks):
     return {"message": "Module deleted"}
 
 
-@app.post(
-    "/api/modules/{module_id}/actions/{action}",
-    dependencies=[Depends(require_admin_access)],
-)
-async def execute_module_action(module_id: str, action: str):
-    """
-    Execute a module-specific action.
-
-    Supported actions depend on the module type.
-    """
-    if module_id not in settings.modules:
-        raise HTTPException(status_code=404, detail="Module not found")
-
-    module = settings.modules[module_id]
-
-    # Add other module actions here as needed
-
-    raise HTTPException(
-        status_code=400,
-        detail=f"Unknown action '{action}' for module type '{module.type}'",
-    )
-
-
 @app.post("/api/channels/{position}/modules", dependencies=[Depends(require_admin_access)])
 async def assign_module_to_channel(
     position: int,
@@ -2146,7 +1361,6 @@ async def assign_module_to_channel(
     order: Optional[int] = None,
 ):
     """Assign a module to a channel."""
-    global settings
 
     if position < 1 or position > 8:
         raise HTTPException(status_code=400, detail="Position must be 1-8")
@@ -2189,7 +1403,6 @@ async def remove_module_from_channel(
     position: int, module_id: str, background_tasks: BackgroundTasks
 ):
     """Remove a module from a channel."""
-    global settings
 
     if position not in settings.channels:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -2216,7 +1429,6 @@ async def reorder_channel_modules(
     position: int, module_orders: Dict[str, int], background_tasks: BackgroundTasks
 ):
     """Reorder modules within a channel. module_orders is {module_id: new_order}."""
-    global settings
 
     if position not in settings.channels:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -2251,7 +1463,6 @@ async def update_channel_schedule(
     - Current: {"rules": [{"expression": "30 8 * * 1-5", "enabled": true}]}
     - Legacy:  ["08:30", "18:00"] (HH:MM list, converted to cron rules)
     """
-    global settings
 
     if position not in settings.channels:
         settings.channels[position] = ChannelConfig(modules=[])
@@ -2395,8 +1606,7 @@ async def trigger_channel(position: int, *, scheduled: bool = False):
         if hasattr(printer, "blip"):
             printer.blip()
 
-        # Reset printer buffer at start of print job (for invert mode)
-        # Also set max lines limit
+        # Start a fresh receipt buffer with the configured length limit.
         max_lines = getattr(settings, "max_print_lines", 200)
         if hasattr(printer, "reset_buffer"):
             printer.reset_buffer(max_lines)
@@ -2444,38 +1654,30 @@ async def trigger_channel(position: int, *, scheduled: bool = False):
             if module != standard_modules[-1]:
                 printer.feed(2)
 
-            # Check for max lines exceeded
+            # Stop after the module that crosses the paper-length limit; the
+            # renderer truncates the buffered receipt and includes a notice.
             if (
                 hasattr(printer, "is_max_lines_exceeded")
                 and printer.is_max_lines_exceeded()
             ):
                 if hasattr(printer, "flush_buffer"):
                     printer.flush_buffer()
-                printer.print_text("")
-                printer.print_text("--- MAX LENGTH REACHED ---")
-                printer.feed(1)
-
-                # Flush again for the message
-                if hasattr(printer, "flush_buffer"):
-                    printer.flush_buffer()
                 return
 
         # 2. Handle Interactive Modules
-        if not interactive_modules:
-            # Done
-            pass
-
-        elif len(interactive_modules) == 1:
+        if len(interactive_modules) == 1:
             # Single interactive module - run it directly
             if standard_modules:
                 printer.feed(2)  # Separator from previous content
             execute_module(interactive_modules[0], scheduled=scheduled)
 
-        else:
+        elif len(interactive_modules) > 1:
             # Multiple interactive modules - show selection menu
             if standard_modules:
                 printer.feed(2)
 
+            if hasattr(printer, "set_selection_indicator"):
+                printer.set_selection_indicator()
             printer.print_header("SELECT APP", icon="list")
             printer.print_line()
 
@@ -2520,18 +1722,9 @@ async def trigger_channel(position: int, *, scheduled: bool = False):
                     # Valid selection - Exit menu selection mode first
                     exit_selection_mode()
 
-                    # Execute the chosen module
-                    # This module will then likely enter its OWN selection mode
+                    # Run the chosen module as its own receipt; it may enter
+                    # its own selection mode (e.g. Adventure).
                     target_module = interactive_modules[idx]
-
-                    # We need to run this on the main thread via execute_module,
-                    # but we are currently in the selection callback (potentially thread pool).
-                    # Actually, execute_module just queues prints or runs logic.
-                    # The tricky part is the adventure module expects to be called to PRINT content
-                    # and enters its OWN selection mode.
-
-                    # We can directly call execute_module from here.
-                    # IMPORTANT: The printer buffer needs reset? Maybe.
                     from app.hardware import printer as hw_printer
 
                     if hasattr(hw_printer, "reset_buffer"):
@@ -2541,11 +1734,6 @@ async def trigger_channel(position: int, *, scheduled: bool = False):
 
                     if hasattr(hw_printer, "flush_buffer"):
                         hw_printer.flush_buffer()
-
-                else:
-                    # Invalid selection
-                    # Ideally we'd re-print or just beep, but for now we do nothing
-                    pass
 
             # Register the callback
             # We use a special ID to indicate this is the channel meta-menu
@@ -2560,11 +1748,7 @@ async def trigger_channel(position: int, *, scheduled: bool = False):
             # Return early since we've handled the printing/logic
             return
 
-        if hasattr(printer, "flush_buffer"):
-            printer.flush_buffer()
-
-        # Flush buffer to actually print. The printer driver applies a fixed
-        # post-print cutter feed after each job.
+        # Send the receipt; the renderer appends the fixed cutter feed.
         if hasattr(printer, "flush_buffer"):
             printer.flush_buffer()
 
@@ -2587,45 +1771,12 @@ async def trigger_current_channel():
     await trigger_channel(position)
 
 
-@app.post("/action/trigger", dependencies=[Depends(require_admin_access)])
-async def manual_trigger():
-    """Print the channel at the current position (like a device button press)."""
-    _require_printer_available()
-    if not try_begin_print_job(debounce=False):
-        raise HTTPException(status_code=409, detail="Print already in progress")
-
-    try:
-        await trigger_current_channel()
-    finally:
-        clear_print_reservation(clear_hold=False)
-    return {"message": "Triggered"}
-
-
-@app.post("/debug/cancel-print", dependencies=[Depends(require_admin_access)])
-async def debug_cancel_print():
-    """Request the same safe cancellation used by the five-second button hold."""
-    if not request_print_cancel():
-        raise HTTPException(status_code=409, detail="No print is currently in progress")
-    return {"message": "Print cancellation requested"}
-
-
-@app.post("/action/dial/{position}", dependencies=[Depends(require_admin_access)])
-async def set_dial(position: int):
-    """Set the channel position (normally reported by the ESP32)."""
-    if position < 1 or position > 8:
-        raise HTTPException(status_code=400, detail="Position must be 1-8")
-
-    dial.set_position(position)
-    return {"message": f"Dial turned to {position}"}
-
-
 @app.post(
     "/action/print-channel/{position}",
     dependencies=[Depends(require_admin_access)],
 )
 async def print_channel(position: int, background_tasks: BackgroundTasks):
-    """Set dial position and trigger print atomically. Returns immediately while print runs in background."""
-    logger = logging.getLogger(__name__)
+    """Print a channel from the settings UI; returns while the print runs in the background."""
 
     if position < 1 or position > 8:
         raise HTTPException(status_code=400, detail="Position must be 1-8")
@@ -2640,7 +1791,7 @@ async def print_channel(position: int, background_tasks: BackgroundTasks):
     return {"message": f"Printing channel {position}"}
 
 
-# --- DEBUG / VIRTUAL HARDWARE CONTROLS ---
+# --- MODULE PREVIEW ---
 
 
 @app.post(
@@ -2684,8 +1835,7 @@ async def print_module_direct(module_id: str):
         if hasattr(printer, "blip"):
             printer.blip()
 
-        # Reset printer buffer at start of print job (for invert mode)
-        # Also set max lines limit
+        # Start a fresh receipt buffer with the configured length limit.
         max_lines = getattr(settings, "max_print_lines", 200)
         if hasattr(printer, "reset_buffer"):
             printer.reset_buffer(max_lines)
@@ -2775,32 +1925,6 @@ class SlackTestRequest(BaseModel):
 async def test_slack(payload: SlackTestRequest):
     """Validate a Slack bot/app token pair without touching live connections."""
     return await slack_manager.test_credentials(payload.bot_token, payload.app_token)
-
-
-@app.post("/debug/test-webhook", dependencies=[Depends(require_admin_access)])
-async def test_webhook(action: WebhookConfig):
-    """
-    Executes a custom webhook immediately for testing.
-    Pass the webhook configuration in the body.
-    Runs blocking operations in a thread pool to avoid blocking the event loop.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    def _run_webhook():
-        webhook.run_webhook(action, printer, module_name=None)
-
-    try:
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            await loop.run_in_executor(executor, _run_webhook)
-    except Exception as e:
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error in test_webhook: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, detail=f"Webhook execution failed: {str(e)}"
-        )
-
-    return {"message": "Webhook executed"}
 
 
 def _preview_webhook_sync(config: dict):

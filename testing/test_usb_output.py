@@ -10,6 +10,7 @@ from app.drivers.print_outputs import PrinterTransportError, PrinterUnavailableE
 from app.drivers.printer_raster import RasterPrinter
 from app.drivers.usb_serial_output import UsbPrinterOutput, UsbSerialOutput
 from app.drivers.usb_bulk_printer import UsbBulkPort, find_native_printer, printer_interface
+from app.drivers.usb_bulk_printer import _ids_from_env
 
 
 class _FakeSerial:
@@ -66,6 +67,19 @@ def _make_driver(fake_serial):
 
 
 STRIP_BYTES = 8 + 48 * 24 + escpos.RASTER_GUARD_BYTES
+
+
+@pytest.mark.parametrize("vendor,product", [
+    ("0fe6", None), ("not-hex", "811e"), ("10000", "811e"),
+])
+def test_native_usb_requires_valid_complete_device_ids(monkeypatch, vendor, product):
+    monkeypatch.setenv("PC1_PRINTER_USB_VENDOR_ID", vendor)
+    if product is None:
+        monkeypatch.delenv("PC1_PRINTER_USB_PRODUCT_ID", raising=False)
+    else:
+        monkeypatch.setenv("PC1_PRINTER_USB_PRODUCT_ID", product)
+    with pytest.raises(ValueError):
+        _ids_from_env()
 
 
 def test_cancel_stops_only_between_complete_raster_strips():
@@ -289,6 +303,7 @@ def test_native_usb_printer_discovery_and_bulk_writes(monkeypatch):
 
 
 def test_native_usb_output_uses_serial_raster_framing(monkeypatch):
+    monkeypatch.setattr("app.drivers.usb_serial_output.time.sleep", lambda _: None)
     fake = _FakeSerial()
     fake.port = "usb:0fe6:811e"
     output = UsbPrinterOutput(open_now=False, serial_factory=lambda port, baud: fake)

@@ -1,10 +1,15 @@
 """Regression tests for merged module configuration features."""
 
+import imaplib
+import json
 from datetime import date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
-from app.modules import calendar as calendar_module
+from app.modules import email_client
 from app.modules import history as history_module
+from app.modules import news as news_module
+from app.modules import quotes as quotes_module
 from app.modules import rss as rss_module
 from app.modules import weather as weather_module
 
@@ -121,40 +126,11 @@ def test_get_weather_defaults_temperature_unit_when_config_missing(monkeypatch):
 
 
 def test_history_module_uses_configured_local_date(monkeypatch):
-    captured = {}
-
-    def fake_get_events_for_date(target_date):
-        captured["date"] = target_date
-        return ["Example event"]
-
     monkeypatch.setattr(history_module, "current_date", lambda: date(2026, 5, 12))
-    monkeypatch.setattr(history_module, "get_events_for_date", fake_get_events_for_date)
 
-    events = history_module.get_events_for_today()
-
-    assert events == ["Example event"]
-    assert captured["date"] == date(2026, 5, 12)
-
-
-def test_calendar_day_view_labels_today_using_configured_local_date(monkeypatch):
-    printer = _WeatherPrinter()
-    target_date = date(2026, 5, 12)
-    events = {
-        target_date: [
-            {
-                "sort_key": "09:00",
-                "is_all_day": False,
-                "time": "9:00 AM",
-                "summary": "Breakfast meeting",
-            }
-        ]
-    }
-
-    monkeypatch.setattr(calendar_module, "current_date", lambda: target_date)
-
-    calendar_module._print_calendar_day_view(printer, [target_date], events)
-
-    assert "TODAY (05/12)" in printer.lines
+    assert history_module._resolve_reference_date(None) == date(2026, 5, 12)
+    assert history_module._resolve_reference_date({}) == date(2026, 5, 12)
+    assert history_module._resolve_reference_date({"reference_date": "2024-02-29"}) == date(2024, 2, 29)
 
 
 def test_get_weather_retries_then_returns_unavailable_without_placeholder_rows(monkeypatch):
@@ -451,3 +427,74 @@ def test_get_rss_articles_keeps_total_receipt_length_capped(monkeypatch):
     )
 
     assert len(articles) == 10
+
+
+def test_fetch_emails_sets_auth_failed_on_imap_auth_error(monkeypatch):
+    config = {
+        "email_service": "Custom",
+        "email_user": "user@example.com",
+        "email_password": "bad-password",
+        "email_host": "imap.example.com",
+        "email_port": 993,
+        "email_use_ssl": True,
+    }
+
+    def fake_imap4_ssl(*args, **kwargs):  # noqa: ARG001
+        raise imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", fake_imap4_ssl)
+
+    messages = email_client.fetch_emails(config)
+    assert messages == []
+    assert email_client._LAST_FETCH_ERROR == "auth_failed"
+
+
+def test_news_module_uses_configurable_country_and_page_size(monkeypatch):
+    captured = {}
+
+    class DummyResponse:
+        def json(self):
+            return {"status": "ok", "articles": []}
+
+    def fake_get(url, params=None, timeout=0):  # noqa: ARG001
+        captured["params"] = params or {}
+        return DummyResponse()
+
+    monkeypatch.setattr(news_module.requests, "get", fake_get)
+    news_module.get_newsapi_articles(
+        {
+            "news_api_key": "abc123",
+            "country": "ca",
+            "page_size": 7,
+        }
+    )
+
+    assert captured["params"]["country"] == "ca"
+    assert captured["params"]["pageSize"] == 7
+
+
+def test_quotes_module_does_not_download_when_local_db_is_missing(monkeypatch):
+    missing_path = Path("/tmp/pc1-missing-quotes.json")
+    monkeypatch.setattr(quotes_module, "_get_quotes_db_path", lambda: missing_path)
+
+    quote = quotes_module.get_random_quote()
+
+    assert quote["quoteText"] == "Offline quotes database is missing."
+    assert quote["quoteAuthor"] == "System"
+
+
+def test_bundled_quotes_db_is_valid_utf8():
+    bundled_path = quotes_module._get_quotes_db_path()
+    with bundled_path.open("r", encoding="utf-8") as f:
+        quotes = json.load(f)
+
+    assert isinstance(quotes, list)
+    assert quotes
+
+
+def test_history_module_does_not_download_when_local_db_is_missing(monkeypatch):
+    monkeypatch.setattr(history_module, "LOCAL_DB_PATH", Path("/tmp/pc1-missing-history.json"))
+
+    events = history_module.get_events_for_date(date(2026, 5, 12))
+
+    assert events == ["Offline history database is missing."]

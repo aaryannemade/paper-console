@@ -41,8 +41,8 @@ const LocationSearch = ({ value = {}, onChange, placeholder = 'Type city name (e
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
         
-        // Use local database logic (use_api=false) and higher limit (20) to match General Settings
-        const response = await fetch(`/api/location/search?q=${encodeURIComponent(term)}&limit=20&use_api=false`, {
+        // Same offline database query and limit as General Settings.
+        const response = await fetch(`/api/location/search?q=${encodeURIComponent(term)}&limit=20`, {
             signal: controller.signal
         });
         clearTimeout(timeoutId);

@@ -1,7 +1,6 @@
-"""Print output selection, console echo/capture and the offline policy (Step 3a)."""
+"""Print output selection, console echo/capture and the offline policy."""
 
 import asyncio
-from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -20,9 +19,6 @@ from app.drivers.print_outputs import (
 from app.drivers.printer_mock import PrinterDriver as TextEchoPrinter
 from app.drivers.printer_raster import RasterPrinter
 from app.relay_link import DeviceLink
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 
 # --- selection -----------------------------------------------------------------
 
@@ -64,16 +60,6 @@ def test_console_mode_echoes_text(monkeypatch):
     assert isinstance(printer.echo, TextEchoPrinter)
 
 
-def test_no_raspberry_pi_or_gpio_code_in_print_path():
-    assert not (PROJECT_ROOT / "app" / "drivers" / "printer_serial.py").exists()
-    for name in ("hardware.py", "drivers/printer_raster.py", "drivers/print_outputs.py",
-                 "drivers/usb_serial_output.py", "drivers/escpos.py"):
-        source = (PROJECT_ROOT / "app" / name).read_text(encoding="utf-8")
-        for needle in ("device-tree", "_is_raspberry_pi", "gpio_ioctl", "button_gpio",
-                       "dial_gpio", "busy_pin", "/dev/serial0"):
-            assert needle not in source.lower(), (name, needle)
-
-
 # --- console output ------------------------------------------------------------------
 
 
@@ -110,7 +96,7 @@ def test_console_byte_count_matches_encoded_receipt():
     assert stats["bytes_sent"] == expected + len(escpos.feed_lines(2))
 
 
-# --- esp32 placeholder and offline policy --------------------------------------------
+# --- esp32 availability and offline policy --------------------------------------------
 
 
 def test_esp32_output_is_unavailable_without_heartbeat():

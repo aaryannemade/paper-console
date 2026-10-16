@@ -3,7 +3,6 @@
 Validate all icon references in the codebase against available icons in icons/regular/icons.txt
 """
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -27,49 +26,12 @@ else:
 
 print(f"Loaded {len(available_icons)} available icons from icons.txt\n")
 
-# Extract icon alias mapping from the shared raster renderer.
-printer_raster_file = project_root / "app" / "drivers" / "printer_raster.py"
+# Extract icon aliases from both raster renderer and weather's PIL icon path.
 icon_map = {}
 direct_references = set()
 
-if printer_raster_file.exists():
-    with open(printer_raster_file, "r", encoding="utf-8") as f:
-        content = f.read()
-
-        # Extract either legacy `icon_map` or current `icon_aliases` dictionary.
-        for var_name in ("icon_map", "icon_aliases"):
-            mapping_match = re.search(rf'{var_name}\s*=\s*\{{(.*?)\n\s*\}}', content, re.DOTALL)
-            if not mapping_match:
-                continue
-            mapping_content = mapping_match.group(1)
-            pairs = re.findall(r'["\']([^"\']+)["\']\s*:\s*["\']([^"\']+)["\']', mapping_content)
-            for key, value in pairs:
-                icon_map[key.lower()] = value.lower()
-
-# Find all icon references in codebase
-# 1. From icon_map keys (aliases)
-icon_aliases = set(icon_map.keys())
-
-# 2. From icon_map values (actual icon names)
-icon_map_targets = set(icon_map.values())
-
-# 3. Direct references from code (search for icon="..." or icon='...')
-code_files = [
-    project_root / "app" / "main.py",
-    project_root / "app" / "modules" / "weather.py",
-    project_root / "app" / "modules" / "astronomy.py",
-    project_root / "app" / "modules" / "news.py",
-    project_root / "app" / "modules" / "rss.py",
-    project_root / "app" / "modules" / "email_client.py",
-    project_root / "app" / "modules" / "calendar.py",
-    project_root / "app" / "modules" / "text.py",
-    project_root / "app" / "modules" / "webhook.py",
-    project_root / "app" / "modules" / "quotes.py",
-    project_root / "app" / "modules" / "system_monitor.py",
-    project_root / "app" / "modules" / "history.py",
-    project_root / "app" / "modules" / "sudoku.py",
-    project_root / "app" / "modules" / "maze.py",
-]
+# Discover new modules automatically instead of maintaining a partial file list.
+code_files = sorted((project_root / "app").rglob("*.py"))
 
 for code_file in code_files:
     if code_file.exists():
@@ -78,9 +40,12 @@ for code_file in code_files:
             # Find icon="..." or icon='...'
             icon_refs = re.findall(r'icon\s*=\s*["\']([^"\']+)["\']', content)
             direct_references.update(icon_refs)
-            # Find print_icon("...")
-            icon_refs2 = re.findall(r'print_icon\s*\(\s*["\']([^"\']+)["\']', content)
-            direct_references.update(icon_refs2)
+            for mapping_match in re.finditer(r'icon_aliases\s*=\s*\{(.*?)\n\s*\}', content, re.DOTALL):
+                for alias, target in re.findall(r'["\']([^"\']+)["\']\s*:\s*["\']([^"\']+)["\']', mapping_match.group(1)):
+                    if target.lower() not in available_icons:
+                        print(f"[ERROR] {code_file.name}: alias {alias!r} -> {target!r} is missing")
+                        sys.exit(1)
+                    icon_map[alias.lower()] = target.lower()
             # Find _get_icon_type return values
             icon_refs3 = re.findall(r'return\s+["\']([^"\']+)["\']', content)
             # Filter for likely icon names (simple heuristic)
@@ -100,7 +65,6 @@ for alias, target in icon_map.items():
 
 # Validate: Check that all direct references either exist or are mapped
 missing_icons = []
-unmapped_direct_refs = []
 
 for ref in direct_references:
     ref_lower = ref.lower()
@@ -145,7 +109,7 @@ else:
     print("\n[OK] All direct icon references are valid")
 
 # Summary
-print(f"\nSUMMARY:")
+print("\nSUMMARY:")
 print(f"  - Available icons: {len(available_icons)}")
 print(f"  - Icon aliases (mapped): {len(icon_map)}")
 print(f"  - Direct references: {len(direct_references)}")

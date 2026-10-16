@@ -1,10 +1,11 @@
-from datetime import datetime
 import threading
 
 from app.config import DEFAULT_CUTTER_FEED_LINES
 
 class PrinterDriver:
-    # Fixed spacing constants (match serial driver)
+    """Text-only stand-in for RasterPrinter: echoes receipts to stdout (console output, tests)."""
+
+    # Spacing constants mirror RasterPrinter
     FONT_SIZE = 18  # Increased for better readability
     LINE_HEIGHT = 22  # Adjusted for larger font
     SPACING_SMALL = 4
@@ -14,8 +15,6 @@ class PrinterDriver:
     def __init__(
         self,
         width: int = 42,  # Characters per line
-        port: str = None,
-        baudrate: int = 9600,
     ):
         self.width = width
         self.lines_printed = 0
@@ -35,10 +34,6 @@ class PrinterDriver:
     def is_cancel_requested(self) -> bool:
         return self._cancel_event.is_set()
     
-    def _load_font(self):
-        """Mock font loading - returns None."""
-        return None
-
     def print_text(self, text: str, style: str = "regular"):
         """Simulates printing styled text.
         
@@ -157,11 +152,6 @@ class PrinterDriver:
         print(f"[PRINT] └────────┴{'─' * 28}┘")
         self.lines_printed += len(lines) + 4
     
-    def print_thick_line(self):
-        """Prints a bold separator line."""
-        print(f"[PRINT] {'━' * self.width}")
-        self.lines_printed += 1
-
     def print_image(self, image):
         """Simulates printing a generic PIL Image."""
         if not image:
@@ -169,37 +159,6 @@ class PrinterDriver:
         print(f"[PRINT] [IMAGE] Size: {image.size} Mode: {image.mode}")
         # Could attempt ASCII art render here, but size/mode log is sufficient for mock
         self.lines_printed += int(image.height / 24) + 1  # Estimate lines
-
-
-
-
-
-
-
-
-
-
-    def print_icon(self, icon_type: str, size: int = 32):
-        """Simulates printing an icon."""
-        icons = {
-            "sun": "☀", "cloud": "☁", "rain": "🌧", "snow": "❄", 
-            "storm": "⛈", "clear": "○", "email": "✉", "mail": "✉",
-            "calendar": "📅", "clock": "🕐", "time": "🕐", "wifi": "📶",
-            "battery": "🔋", "check": "✓", "checkmark": "✓", "x": "✗",
-            "close": "✗", "star": "★", "heart": "♥", "settings": "⚙",
-            "gear": "⚙", "home": "⌂", "location": "📍", "pin": "📍",
-            "arrow_right": "→", "arrow_left": "←", "arrow_up": "↑", "arrow_down": "↓",
-            "user": "👤", "trash": "🗑", "search": "🔍", "menu": "☰",
-            "printer": "🖨", "cpu": "💻", "floppy": "💾", "save": "💾",
-            "play": "▶", "pause": "⏸", "volume": "🔊", "speaker": "🔊"
-        }
-        icon = icons.get(icon_type.lower(), "?")
-        print(f"[PRINT]     [{icon}]")
-        self.lines_printed += 1
-
-
-
-
 
     def feed(self, lines: int = 3):
         """Simulates paper feed."""
@@ -235,7 +194,7 @@ class PrinterDriver:
         self.lines_printed += 5
 
     def flush_buffer(self):
-        """Flush the print buffer (for invert mode compatibility)."""
+        """Nothing is buffered; each call already printed."""
         pass
 
     def reset_buffer(self, max_lines: int = 0):
@@ -243,23 +202,11 @@ class PrinterDriver:
         self.lines_printed = 0
         self.max_lines = max_lines
 
-    def clear_hardware_buffer(self):
-        """Clear hardware buffer (no-op for mock)."""
-        pass
-
     def is_max_lines_exceeded(self) -> bool:
         """Check if we've exceeded the maximum print length."""
         if self.max_lines <= 0:
             return False
         return self.lines_printed >= self.max_lines
-
-    def was_truncated(self) -> bool:
-        """Check if the last print was truncated due to max lines."""
-        return False  # Mock doesn't track this
-
-    def feed_direct(self, lines: int = 3):
-        """Feed paper directly, bypassing the buffer."""
-        self.feed(lines)
 
     def feed_dots(self, dots: int = 12):
         """Simulate dot feed (12 dots ~= half line)."""

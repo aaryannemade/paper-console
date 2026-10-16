@@ -2,9 +2,8 @@ import requests
 import json
 import io
 import logging
-from typing import Optional
 from PIL import Image
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.config import WebhookConfig, format_print_datetime
 from app.module_registry import register_module
 
@@ -95,7 +94,7 @@ def _prepare_image_for_print(image: Image.Image) -> Image.Image:
     return image
 
 
-def _print_image_response(response, printer: PrinterDriver) -> bool:
+def _print_image_response(response, printer: RasterPrinter) -> bool:
     try:
         with Image.open(io.BytesIO(response.content)) as image:
             printer.print_image(_prepare_image_for_print(image))
@@ -196,7 +195,7 @@ def request_webhook_response(action: WebhookConfig):
         "test_button": {"ui:widget": "webhook-test"}
     },
 )
-def run_webhook(action: WebhookConfig, printer: PrinterDriver, module_name: str = None):
+def run_webhook(action: WebhookConfig, printer: RasterPrinter, module_name: str = None):
     """
     Executes a custom webhook action and prints the result.
     Supports JSON path extraction to print specific fields.

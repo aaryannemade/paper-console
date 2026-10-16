@@ -1,9 +1,8 @@
-from datetime import datetime
 import logging
 import base64
 import io
 from PIL import Image
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.module_registry import register_module
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,7 @@ MAX_WIDTH = 384  # Max width for most thermal printers in pixels
         }
     }
 )
-def format_image_receipt(printer: PrinterDriver, config, module_name="IMAGE"):
+def format_image_receipt(printer: RasterPrinter, config, module_name="IMAGE"):
     image_data = config.get("image_data")
     
     if image_data:
@@ -53,7 +52,7 @@ def format_image_receipt(printer: PrinterDriver, config, module_name="IMAGE"):
             print_image_receipt(printer, img, module_name)
         except Exception as e:
             logger.error(f"Failed to decode image from config: {e}")
-            printer.print_body(f"Error: Could not load image.")
+            printer.print_body("Error: Could not load image.")
     else:
         logger.warning("Image module called without image_data in config.")
 
@@ -78,7 +77,7 @@ def resize_and_convert_image(raw_data_uri):
 
         return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
 
-def print_image_receipt(printer: PrinterDriver, image, title):
+def print_image_receipt(printer: RasterPrinter, image, title):
     if not image:
         return
 

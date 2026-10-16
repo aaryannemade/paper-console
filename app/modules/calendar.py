@@ -1,18 +1,16 @@
 import requests
-import pytz
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import logging
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
 from icalendar import Calendar
 from dateutil.rrule import rrulestr
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.config import CalendarConfig, current_date, format_print_datetime, format_time
 import app.config
 from app.module_registry import register_module
 from PIL import Image, ImageDraw
-import app.config  # Ensure app.config is imported for timezone access
 
-APP_CONFIG = app.config  # Alias to avoid confusion if needed
 logger = logging.getLogger(__name__)
 MAX_ICS_BYTES = 10 * 1024 * 1024
 ICS_CHUNK_BYTES = 64 * 1024
@@ -110,9 +108,9 @@ def parse_events(
 
     # Timezone setup
     try:
-        local_tz = pytz.timezone(timezone_str)
-    except:
-        local_tz = pytz.UTC
+        local_tz = ZoneInfo(timezone_str)
+    except (ZoneInfoNotFoundError, TypeError, ValueError):
+        local_tz = ZoneInfo("UTC")
 
     now = datetime.now(local_tz)
     today = now.date()
@@ -148,7 +146,7 @@ def parse_events(
             else:
                 # Ensure timezone awareness
                 if start.tzinfo is None:
-                    start = local_tz.localize(start)
+                    start = start.replace(tzinfo=local_tz)
                 else:
                     start = start.astimezone(local_tz)
 
@@ -177,9 +175,9 @@ def parse_events(
                     else:
                         # Rule is aware, so query must be aware
                         if query_start.tzinfo is None:
-                            query_start = local_tz.localize(query_start)
+                            query_start = query_start.replace(tzinfo=local_tz)
                         if query_end.tzinfo is None:
-                            query_end = local_tz.localize(query_end)
+                            query_end = query_end.replace(tzinfo=local_tz)
 
                     exdate_keys = set()
                     exdate_prop = component.get("EXDATE")
@@ -192,7 +190,7 @@ def parse_events(
                                 ex_dt = ex_dt_val.dt
                                 if isinstance(ex_dt, datetime):
                                     if ex_dt.tzinfo is None and rrule_start.tzinfo is not None:
-                                        ex_dt = local_tz.localize(ex_dt)
+                                        ex_dt = ex_dt.replace(tzinfo=local_tz)
                                     elif (
                                         ex_dt.tzinfo is not None
                                         and rrule_start.tzinfo is not None
@@ -210,7 +208,7 @@ def parse_events(
                             event_instances.append((dt.date(), True))
                         else:
                             if dt.tzinfo is None and local_tz:
-                                dt = local_tz.localize(dt)
+                                dt = dt.replace(tzinfo=local_tz)
                             event_instances.append((dt, False))
 
                     # Include RDATE manual additions that may not be part of RRULE expansion.
@@ -226,7 +224,7 @@ def parse_events(
                                 rdt = rdate_dt_val.dt
                                 if isinstance(rdt, datetime):
                                     if rdt.tzinfo is None:
-                                        rdt = local_tz.localize(rdt)
+                                        rdt = rdt.replace(tzinfo=local_tz)
                                     else:
                                         rdt = rdt.astimezone(local_tz)
                                     if query_start <= rdt <= query_end:
@@ -434,26 +432,6 @@ def _print_calendar_month_view(printer, sorted_dates, all_events):
                 printer.print_line()
 
 
-def _print_calendar_compact_view(printer, sorted_dates, all_events):
-    """Compact timeline view for 3 days with visual separators."""
-    today = current_date()
-    for i, d in enumerate(sorted_dates[:3]):
-        events = all_events[d]
-        events.sort(key=lambda x: x["sort_key"])
-        
-        # Day header
-        day_name = _relative_day_label(d, today)
-        
-        printer.print_subheader(f"{day_name} ({d.strftime('%m/%d')})")
-        
-        # Print events in compact list format
-        for evt in events:
-            _print_calendar_event_inline(printer, evt)
-        
-        if i < len(sorted_dates) - 1:
-            printer.print_line()
-
-
 def _print_calendar_week_view(printer, sorted_dates, all_events):
     """Week view with mini calendar grid and compact event list."""
     # Convert all_events to format expected by calendar grid (date string -> event count)
@@ -551,7 +529,7 @@ def _resolve_view_mode(config: CalendarConfig) -> str:
     }
 )
 def format_calendar_receipt(
-    printer: PrinterDriver, config: CalendarConfig, module_name: str = None
+    printer: RasterPrinter, config: CalendarConfig, module_name: str = None
 ):
     """Fetches and prints the calendar agenda."""
 

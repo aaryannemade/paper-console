@@ -271,10 +271,6 @@ def get_module_status(module_id: str) -> Dict[str, Any]:
     )
 
 
-def has_active_instances() -> bool:
-    return bool(_connections)
-
-
 async def test_credentials(bot_token: str, app_token: str) -> Dict[str, Any]:
     """Validate a token pair without touching the running connections."""
     bot_token = (bot_token or "").strip()

@@ -2,8 +2,7 @@ import csv
 import random
 import os
 import logging
-from typing import List, Dict, Tuple, Optional, Any
-import string
+from typing import List, Dict, Tuple, Any
 from PIL import Image, ImageDraw, ImageFont
 from app.module_registry import register_module
 from app.config import format_print_datetime

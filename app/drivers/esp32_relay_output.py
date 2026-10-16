@@ -267,7 +267,7 @@ class Esp32RelayOutput(PrintOutput):
         return stats
 
     def _fire_and_forget(self, records: list, kind: str):
-        """Small jobs (feeds, reset) are pushed but not followed to completion."""
+        """Small jobs (tactile feeds) are pushed but not followed to completion."""
         if not self.is_available():
             return
         if not self._job_lock.acquire(timeout=0.5):
@@ -283,11 +283,6 @@ class Esp32RelayOutput(PrintOutput):
         data = escpos.feed_dots(dots)
         if data:
             self._fire_and_forget([data], "feed")
-
-    def reset(self) -> None:
-        self._fire_and_forget(
-            [escpos.CAN, escpos.ESC_INIT + escpos.ASCII_SETTINGS], "reset"
-        )
 
     def close(self) -> None:
         try:

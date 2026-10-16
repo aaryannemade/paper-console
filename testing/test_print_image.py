@@ -2,7 +2,6 @@ import base64
 import io
 from PIL import Image
 from app.modules import print_image
-from app.drivers.printer_mock import PrinterDriver
 
 def test_resize_and_convert_image_resizes_large_images():
     # Create a 500x500 red image (larger than MAX_WIDTH of 384)

@@ -54,8 +54,7 @@ raw edges. All gestures of one physical press carry the same `press_id`.
 | --- | --- |
 | `press` | Released before 5 s. |
 | `hold` | 5 s reached while still held (send once, immediately). |
-| `hold_release` | Released after `hold`, before 15 s. |
-| `long_hold` | 15 s reached while still held (send once, immediately). Nothing is sent on the later release. |
+| `hold_release` | Released after `hold`, regardless of how long it remains held. |
 
 ```json
 {"event_id": "a3f9c2-42", "type": "button", "gesture": "press", "press_id": "a3f9c2-17", "position": 5}
@@ -86,7 +85,6 @@ Unknown fields are ignored. Malformed events get `422`.
 | `hold` | A print is running | `cancel_requested` — the print stops at the next raster strip. The rest of this press is ignored. |
 | `hold` | Idle | `hold_ready` — a short paper feed tells the user they can release |
 | `hold_release` | After `hold_ready` | `quick_actions` — prints the Quick Actions menu |
-| `long_hold` | | `factory_reset` — prints a notice and resets application settings (never networking or the host) |
 
 Other results, all with HTTP `200`:
 
@@ -95,7 +93,7 @@ Other results, all with HTTP `200`:
 | `position_set` | Position stored. |
 | `busy` | Another job holds the printer, or a press arrived within 3 s of the last print. Nothing happens; the event is not queued. |
 | `printer_unavailable` | The print output cannot accept a receipt. Nothing happens. |
-| `ignored_consumed` | `hold_release`/`long_hold` for a press that already cancelled a print or reset. |
+| `ignored_consumed` | `hold_release` for a press that already cancelled a print. |
 | `not_ready` | The server is still starting. |
 | `error` | The gesture failed on the server (logged). |
 
@@ -119,7 +117,7 @@ continues in the background. The firmware may use `result` for local feedback
   not configured". Do not retry these in a tight loop.
 - Drop events that are older than a few seconds instead of replaying them late; a
   stale `press` would print something the user no longer expects.
-- Physical debouncing of the switch and the 5 s / 15 s timing are firmware
+- Physical debouncing of the switch and the 5 s hold threshold are firmware
   responsibilities.
 
 ### Development
@@ -132,7 +130,6 @@ just device position 5
 just device press
 just device quick-actions    # hold, then hold_release
 just device hold             # during a print: cancel
-just device factory-reset    # hold, then long_hold
 ```
 
 ## Heartbeat (device → container)
@@ -187,8 +184,9 @@ The device writes each record to the UART **unchanged and in order**. It never
 needs to parse printer commands. Cancellation takes effect only **between**
 records, so the printer is never left inside a raster command.
 
-Tactile feeds (`kind: "feed"`) and the startup reset (`kind: "reset"`) are tiny
-jobs of the same form. The container does not wait for them to finish.
+Tactile feeds (`kind: "feed"`) are tiny jobs of the same form. The container
+does not wait for them to finish. The firmware initialises its printer UART
+on device boot, independently of container startup.
 
 All requests carry `Authorization: Bearer <token>`. The device must answer `401`
 to a missing or wrong token.

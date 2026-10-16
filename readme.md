@@ -59,13 +59,15 @@ use `just device ...` to send the same events during development.
 - Hold ~5 seconds, then release, for **Quick Actions**:
   - `1` Table of Contents
   - `2` System Monitor
-  - `5` Reset application settings
   - `8` Cancel
 - Quick Actions are single-shot and auto-exit after 2 minutes without a choice.
-- Hold ~15 seconds to reset application settings.
 
-Resetting restores default channels/modules only. It does not change the server
-password, networking, or restart the host.
+To start over, stop the stack and clear the **dedicated host directory** mounted
+as `/data`, then start it again. This removes saved settings, Adventure progress
+and a generated password (which will be regenerated on startup). An explicitly
+configured `PC1_DEVICE_PASSWORD` in `.env` remains in effect. Because `/data` is
+a bind mount, `docker compose down -v` alone does not remove these files. Keep
+the host directory writable by the configured PUID/PGID when recreating it.
 
 ---
 
@@ -183,35 +185,12 @@ The flake provides `just`, Python 3.12, libusb and the application/test dependen
 `web/package-lock.json`. The first shell entry downloads the Nix dependencies;
 `npm ci` separately installs the frontend dependencies.
 
-The recipes use Python from the shell rather than
-`testing/run_tests.sh`, which creates a pip-managed `.venv`. Enter the shell
-without an activated virtual environment to use the Nix-provided Python.
-No `.venv` is created or modified by the flake. If Python requirements change,
+The recipes use Python from the Nix shell. Enter it with `nix develop`, then
+run `just test`, `just icons`, or `just backend`. If Python requirements change,
 update the package list in `flake.nix` as well.
 
 The settings UI screenshot helper has an additional Playwright/browser setup
 requirement; browser binaries are not included in this development shell.
-
-#### Python virtual environment
-
-First-time setup:
-
-```bash
-python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements-dev.txt
-cd web && npm install
-```
-
-1. **Install Python Dependencies:**
-   ```bash
-   ./.venv/bin/python -m pip install -r requirements-dev.txt
-   ```
-    This installs the app dependencies, USB printer support, and test tooling.
-
-2. **Run the Server:**
-   ```bash
-    PC1_PRINTER_OUTPUT=console ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-   ```
 
 ### Container deployment (Step 4)
 
@@ -221,6 +200,8 @@ on the same configurable port. The application state lives in `PC1_DATA_DIR=/dat
 `config.json`, `config.json.bak`, the generated `.device_password`, and
 `adventure_saves/`. Bundled stories and offline databases remain inside the
 image. Container updates replace the image without changing the bind mount.
+Both Compose services run with a read-only root filesystem and a temporary
+`/tmp`; persistent application files can only be written under `/data`.
 
 The Compose files use an **absolute host bind mount**:
 
@@ -328,11 +309,12 @@ as well as the endpoint's authentication and content validation errors.
 ### Local Validation Workflows
 Use the local test and snapshot workflows:
 
-* **Pytest:** `./testing/run_tests.sh`
-* **Print snapshots:** `./.venv/bin/python testing/render_all_prints.py --output-dir testing/artifacts/print`
-* **Settings UI snapshots:** `./.venv/bin/python testing/render_settings_ui.py --output-dir testing/artifacts/ui`
+* **Pytest:** `just test`
+* **Icons:** `just icons`
+* **Print snapshots:** `python testing/render_all_prints.py --output-dir testing/artifacts/print`
+* **Settings UI snapshots:** `python testing/render_settings_ui.py --output-dir testing/artifacts/ui`
 
-These workflows run without physical controls or a printer.
+Run these inside `nix develop`. They need no physical controls or printer.
 
 ### Security & Network Environment Variables
 For production deployments, configure these environment variables:
@@ -348,15 +330,15 @@ For production deployments, configure these environment variables:
 * **`PC1_CORS_ORIGINS`**: Comma-separated CORS origins (default is local/dev origins only).
 * **`PC1_LOG_LEVEL`**: Backend log level (default: `WARNING` on device builds).
 
-Container image releases are planned for Step 4; the old in-place device update
-and imaging workflows have been removed.
+Container images are built by `.github/workflows/docker-image.yml`; deploy by
+replacing the image and keeping the `/data` bind mount.
 
 ---
 
 ## 4. Architecture & Modules
 
 ### Tech Stack
-* **OS:** Linux server or development host (container packaging planned)
+* **OS:** Linux server (container) or development host
 * **Backend:** Python 3.12 + FastAPI
 * **Frontend:** React + Vite + Tailwind CSS v4
 
@@ -368,7 +350,8 @@ paper-console/
 │   ├── auth.py                 # Device-password auth and session helpers
 │   ├── config.py               # Settings, channels, schedules, module models
 │   ├── device_password.py      # Server password (env, secret file, or generated)
-│   ├── factory_reset.py        # Application settings reset (no host changes)
+│   ├── paths.py                # Persistent application data directory
+│   ├── version.py              # Image or development checkout version
 │   ├── hardware.py             # Printer reservation and channel position
 │   ├── location_lookup.py      # City/timezone lookup helpers
 │   ├── module_registry.py      # @register_module metadata and validation
@@ -419,9 +402,9 @@ paper-console/
 │   ├── render_settings_ui.py
 │   ├── console_raster_preview.py
 │   ├── relay_simulator.py      # ESP32 reference device for local tests
-│   ├── run_tests.sh
+│   ├── device_event.py         # Local ESP32 input-event client
 │   └── artifacts/
-├── development/                # BOM, internal docs, supporting scripts
+├── docs/                       # Relay protocol and container/ESP32 plan
 ├── icons/                      # Icon source assets
 ├── images/                     # Product photos used in the README
 ├── .github/workflows/
@@ -465,7 +448,7 @@ paper-console/
 
 **History:** Offline “on this day” events; optional event count in config.
 
-**System Monitor:** Server hostname, IP, disk/memory bars, uptime, load, CPU temp (where available).
+**System Monitor:** Application version, printer output and readiness, ESP32 link and recent job, and `/data` usage.
 
 **Word of the Day:** Merriam Webster's word of the day
 

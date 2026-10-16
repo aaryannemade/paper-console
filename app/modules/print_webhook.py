@@ -11,7 +11,7 @@ import requests
 from PIL import Image
 
 from app.config import PrintWebhookConfig, format_print_datetime
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.module_registry import register_module
 
 logger = logging.getLogger(__name__)
@@ -286,7 +286,7 @@ def parse_request_payload(
 
 
 def _print_image_bytes(
-    printer: PrinterDriver,
+    printer: RasterPrinter,
     image_bytes: bytes,
     *,
     max_height: int,
@@ -302,7 +302,7 @@ def _print_image_bytes(
 
 
 def print_parsed_job(
-    printer: PrinterDriver,
+    printer: RasterPrinter,
     job: Dict[str, Any],
     config: PrintWebhookConfig,
     module_name: str,
@@ -454,7 +454,7 @@ def print_parsed_job(
     },
 )
 def format_print_webhook_receipt(
-    printer: PrinterDriver,
+    printer: RasterPrinter,
     config: Optional[Dict[str, Any]] = None,
     module_name: str = None,
     module_id: str = None,

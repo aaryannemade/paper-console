@@ -9,9 +9,10 @@ from bs4 import BeautifulSoup
 from typing import Dict, Any, List
 from urllib.parse import urlsplit
 import re
-from app.config import EmailConfig, PRINTER_WIDTH, format_print_datetime
+from app.config import EmailConfig, format_print_datetime
 import app.config
 from app.module_registry import register_module
+from app.utils import wrap_text
 
 # Set default socket timeout for IMAP operations (30 seconds)
 IMAP_TIMEOUT = 30
@@ -166,9 +167,6 @@ def clip_wrapped_text(text: str, width: int, max_lines: int) -> str:
     clipped[-1] = tail + "..."
     return "\n".join(clipped)
 
-
-# Use wrap_text from utils instead of duplicating
-from app.utils import wrap_text
 
 # --- REAL IMAP LOGIC ---
 def fetch_emails(config: Dict[str, Any] = None) -> List[Dict[str, str]]:

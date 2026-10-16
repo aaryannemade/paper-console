@@ -72,7 +72,7 @@ def test_generated_password_survives_restart(monkeypatch):
     assert device_password.get_device_password() == first
 
 
-def test_generated_password_does_not_depend_on_host_identity(monkeypatch, tmp_path):
+def test_generated_password_is_random_per_file(monkeypatch, tmp_path):
     first = device_password.get_device_password()
     monkeypatch.setenv("PC1_GENERATED_PASSWORD_FILE", str(tmp_path / "other"))
 

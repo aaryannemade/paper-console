@@ -147,6 +147,8 @@ def _enter_adventure_selection(module_id: str, printer):
 
 def print_story_node(printer, story: Dict, node: Dict, state: AdventureState, module_name: str):
     """Print a story node with its text and available choices."""
+    if not node.get("ending") and hasattr(printer, "set_selection_indicator"):
+        printer.set_selection_indicator()
     meta = story.get("meta", {})
     title = meta.get("title", "Adventure")
     
@@ -299,7 +301,7 @@ def process_choice(module_id: str, dial_position: int, printer):
         # Get next node
         next_node_id = selected_choice.get("next")
         if not next_node_id:
-            logger.error(f"Adventure: No next node for choice")
+            logger.error("Adventure: No next node for choice")
             return
         
         # Update state

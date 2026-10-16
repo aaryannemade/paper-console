@@ -1,6 +1,6 @@
 from typing import Any, Dict, List
 from app.config import TextConfig, format_print_datetime
-from app.drivers.printer_mock import PrinterDriver
+from app.drivers.printer_raster import RasterPrinter
 from app.module_registry import register_module
 
 DEFAULT_CONTENT_DOC = {"type": "doc", "content": [{"type": "paragraph"}]}
@@ -30,7 +30,7 @@ DEFAULT_CONTENT_DOC = {"type": "doc", "content": [{"type": "paragraph"}]}
         }
     },
 )
-def format_text_receipt(printer: PrinterDriver, config: TextConfig, module_name: str = None):
+def format_text_receipt(printer: RasterPrinter, config: TextConfig, module_name: str = None):
     """Prints a static text note from a TipTap JSON document."""
     header_label = module_name or "NOTE"
     printer.print_header(header_label, icon="note")
@@ -40,7 +40,7 @@ def format_text_receipt(printer: PrinterDriver, config: TextConfig, module_name:
     print_rich_doc(printer, config.content_doc)
 
 
-def print_rich_doc(printer: PrinterDriver, content_doc: Any):
+def print_rich_doc(printer: RasterPrinter, content_doc: Any):
     """Print a TipTap JSON document body (shared by Text/Note and Slack prints)."""
     content_doc = _normalize_content_doc(content_doc)
 
@@ -80,12 +80,12 @@ def _doc_has_visible_content(node: Any) -> bool:
     return any(_doc_has_visible_content(child) for child in children)
 
 
-def _print_rich_doc(printer: PrinterDriver, doc: Dict[str, Any]):
+def _print_rich_doc(printer: RasterPrinter, doc: Dict[str, Any]):
     for node in doc.get("content", []):
         _print_block_node(printer, node, indent="")
 
 
-def _print_block_node(printer: PrinterDriver, node: Dict[str, Any], indent: str = ""):
+def _print_block_node(printer: RasterPrinter, node: Dict[str, Any], indent: str = ""):
     if not isinstance(node, dict):
         return
 
@@ -125,12 +125,12 @@ def _print_block_node(printer: PrinterDriver, node: Dict[str, Any], indent: str 
         _print_multiline(printer, f"{indent}{fallback_text}", style="regular")
 
 
-def _print_unordered_list(printer: PrinterDriver, node: Dict[str, Any], indent: str):
+def _print_unordered_list(printer: RasterPrinter, node: Dict[str, Any], indent: str):
     for item in node.get("content", []):
         _print_list_item(printer, item, prefix=f"{indent}• ", child_indent=f"{indent}  ")
 
 
-def _print_ordered_list(printer: PrinterDriver, node: Dict[str, Any], indent: str):
+def _print_ordered_list(printer: RasterPrinter, node: Dict[str, Any], indent: str):
     attrs = node.get("attrs") or {}
     start = attrs.get("start", 1)
     try:
@@ -143,7 +143,7 @@ def _print_ordered_list(printer: PrinterDriver, node: Dict[str, Any], indent: st
         index += 1
 
 
-def _print_task_list(printer: PrinterDriver, node: Dict[str, Any], indent: str):
+def _print_task_list(printer: RasterPrinter, node: Dict[str, Any], indent: str):
     for item in node.get("content", []):
         if not isinstance(item, dict):
             continue
@@ -154,7 +154,7 @@ def _print_task_list(printer: PrinterDriver, node: Dict[str, Any], indent: str):
 
 
 def _print_list_item(
-    printer: PrinterDriver,
+    printer: RasterPrinter,
     item: Dict[str, Any],
     prefix: str,
     child_indent: str,
@@ -198,7 +198,7 @@ def _print_list_item(
 
 
 def _print_multiline(
-    printer: PrinterDriver,
+    printer: RasterPrinter,
     text: str,
     style: str = "regular",
     allow_blank: bool = False,
@@ -216,7 +216,7 @@ def _print_multiline(
         printer.print_text(line, style)
 
 
-def _print_blank_line(printer: PrinterDriver):
+def _print_blank_line(printer: RasterPrinter):
     if hasattr(printer, "feed"):
         printer.feed(1)
     else:

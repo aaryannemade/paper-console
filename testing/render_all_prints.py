@@ -11,6 +11,7 @@ It captures:
 from __future__ import annotations
 
 import argparse
+import importlib
 from copy import deepcopy
 import os
 import sys
@@ -23,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import app.modules  # noqa: F401
+importlib.import_module("app.modules")
 import app.selection_mode as selection_mode
 from app.config import (
     PRINTER_WIDTH,
@@ -242,7 +243,7 @@ def _apply_snapshot_defaults(type_id: str, config: dict) -> dict:
 
     elif type_id == "image":
         if not out.get("image_data"):
-            out["image_data"] = open(PROJECT_ROOT / "testing/test_image.txt").read()
+            out["image_data"] = (PROJECT_ROOT / "testing/sample_image.b64").read_text(encoding="utf-8")
 
     return out
 
@@ -460,24 +461,6 @@ def _default_config_for_module_type(type_id: str, defn) -> dict:
                 type_id,
                 _overlay_env_test_config(type_id, dict(module.config or {})),
             )
-
-    # Fall back to config class defaults when available.
-    config_class = getattr(defn, "config_class", None)
-    if config_class:
-        try:
-            cfg = config_class()
-            if hasattr(cfg, "model_dump"):
-                return _apply_snapshot_defaults(
-                    type_id,
-                    _overlay_env_test_config(type_id, cfg.model_dump()),
-                )
-            if hasattr(cfg, "dict"):
-                return _apply_snapshot_defaults(
-                    type_id,
-                    _overlay_env_test_config(type_id, cfg.dict()),
-                )
-        except Exception:
-            pass
 
     return _apply_snapshot_defaults(type_id, _overlay_env_test_config(type_id, {}))
 

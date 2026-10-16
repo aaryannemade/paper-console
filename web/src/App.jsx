@@ -5,7 +5,6 @@ import AddModuleModal from './components/AddModuleModal';
 import EditModuleModal from './components/EditModuleModal';
 import ScheduleModal from './components/ScheduleModal';
 import StatusMessage from './components/StatusMessage';
-import ResetSettingsButton from './components/ResetSettingsButton';
 import SettingsLogin from './components/SettingsLogin';
 import { useModuleTypes } from './hooks/useModuleTypes';
 import useTheme from './hooks/useTheme';
@@ -148,7 +147,7 @@ function App() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-        const response = await fetch(`/api/location/search?q=${encodeURIComponent(term)}&limit=20&use_api=false`, {
+        const response = await fetch(`/api/location/search?q=${encodeURIComponent(term)}&limit=20`, {
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
@@ -809,7 +808,7 @@ function App() {
               saveGlobalSettings={saveGlobalSettings}
               onConfigImported={applyImportedConfig}
             />
-            <div className='mt-8 flex items-center justify-between'>
+            <div className='mt-8'>
               {/* GitHub Link */}
               <a
                 href='https://github.com/travmiller/paper-console'
@@ -820,8 +819,6 @@ function App() {
                 <span className='text-sm font-mono'>paper-console</span>
               </a>
 
-              {/* Reset Button */}
-              <ResetSettingsButton setSettings={setSettings} setModules={setModules} setStatus={setStatus} />
             </div>
             </>
           )}

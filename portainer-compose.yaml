@@ -8,6 +8,9 @@ services:
     # (`id -u` / `id -g`, e.g. 1000:100 on NixOS). Set PUID/PGID in the
     # stack's environment variables.
     user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,mode=1777
     ports:
       - "${PC1_HOST_PORT:-8000}:${PC1_PORT:-8000}"
     environment:
@@ -21,4 +24,7 @@ services:
       PC1_CORS_ORIGINS: ${PC1_CORS_ORIGINS:-}
       TZ: ${TZ:-UTC}
     volumes:
+      # Persistent settings, saves and generated password. To restore defaults,
+      # stop the stack and empty this dedicated host directory; `down -v`
+      # does not delete bind-mount contents.
       - /path/to/data:/data

@@ -241,29 +241,6 @@ def finalize_incoming_job(
     return PreparedPrintWebhookJob(module_id=target.module_id, job=job)
 
 
-def prepare_incoming_job(
-    *,
-    modules: Mapping[str, ModuleInstance],
-    channels: Mapping[int, ChannelConfig],
-    endpoint_path: str,
-    request: Request,
-    dial_position: Optional[int],
-    body: bytes,
-) -> PreparedPrintWebhookJob:
-    target = resolve_incoming_target(
-        modules=modules,
-        channels=channels,
-        endpoint_path=endpoint_path,
-        request=request,
-        dial_position=dial_position,
-    )
-    return finalize_incoming_job(
-        target=target,
-        content_type=request.headers.get("content-type", ""),
-        body=body,
-    )
-
-
 def print_job(
     *,
     modules: Mapping[str, ModuleInstance],

@@ -21,15 +21,11 @@ Example usage:
         printer.print_body("Hello from my module!")
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Any, Callable, Optional, List
 import logging
-try:
-    import jsonschema
-    from jsonschema import validate, ValidationError
-    HAS_JSONSCHEMA = True
-except ImportError:
-    HAS_JSONSCHEMA = False
+
+from jsonschema import validate, ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -49,7 +45,6 @@ class ModuleDefinition:
         execute_fn: The function to call when printing (format_xxx_receipt)
         config_schema: JSON Schema for generating config forms (optional)
         ui_schema: UI Schema for customizing form rendering (optional)
-        config_class: Pydantic config class if the module uses one (optional)
         category: For grouping in UI (e.g., "content", "games", "utilities")
     """
     type_id: str
@@ -57,11 +52,10 @@ class ModuleDefinition:
     description: str
     icon: str
     offline: bool
-    interactive: bool  # New flag for dial-hijacking modules
+    interactive: bool  # Takes over the dial with its own menu (selection mode)
     execute_fn: Callable
     config_schema: Optional[Dict[str, Any]] = None
     ui_schema: Optional[Dict[str, Any]] = None
-    config_class: Optional[type] = None
     category: str = "general"
 
 
@@ -78,7 +72,6 @@ def register_module(
     interactive: bool = False,
     config_schema: Optional[Dict[str, Any]] = None,
     ui_schema: Optional[Dict[str, Any]] = None,
-    config_class: Optional[type] = None,
     category: str = "general",
 ):
     """
@@ -104,7 +97,6 @@ def register_module(
         offline: Whether the module works without internet
         config_schema: JSON Schema for config form generation (optional)
         ui_schema: UI Schema for customizing form rendering (optional)
-        config_class: Pydantic config class (optional)
         category: Grouping category for UI (optional)
     
     Returns:
@@ -124,7 +116,6 @@ def register_module(
             execute_fn=fn,
             config_schema=config_schema,
             ui_schema=ui_schema,
-            config_class=config_class,
             category=category,
         )
         logger.debug(f"Registered module: {type_id}")
@@ -179,44 +170,6 @@ def list_module_types() -> List[Dict[str, Any]]:
     return modules
 
 
-def execute_module_by_type(
-    module_type: str,
-    printer,
-    config: Dict[str, Any],
-    module_name: str,
-) -> bool:
-    """
-    Execute a module by its type ID.
-    
-    This is the main entry point for running modules from the dispatch system.
-    
-    Args:
-        module_type: The module type identifier (e.g., "weather", "quotes")
-        printer: The printer driver instance
-        config: Module configuration dictionary
-        module_name: Display name for the module header
-        
-    Returns:
-        True if the module executed successfully, False otherwise
-    """
-    defn = _registry.get(module_type)
-    
-    if defn is None:
-        logger.warning(f"Unknown module type: {module_type}")
-        return False
-    
-    try:
-        # All modules follow the signature: (printer, config, module_name)
-        # Some may use config differently (e.g., email uses 'messages' parameter)
-        # but the standard call works for most modules
-        defn.execute_fn(printer, config, module_name)
-        return True
-    except Exception as e:
-        logger.error(f"Error executing module '{module_type}': {e}", exc_info=True)
-        return False
-
-
-
 def validate_module_config(module_type: str, config: Dict[str, Any]) -> None:
     """
     Validate a module configuration against its registered schema.
@@ -233,27 +186,8 @@ def validate_module_config(module_type: str, config: Dict[str, Any]) -> None:
         raise ValueError(f"Unknown module type: {module_type}")
         
     if defn.config_schema:
-        if not HAS_JSONSCHEMA:
-            logger.warning(f"jsonschema not installed. Skipping validation for {module_type}.")
-            return
-            
         try:
             validate(instance=config, schema=defn.config_schema)
         except ValidationError as e:
             path = ".".join(str(p) for p in e.path) if e.path else "root"
             raise ValueError(f"Invalid configuration for {module_type} at '{path}': {e.message}")
-
-
-def is_registered(type_id: str) -> bool:
-    """Check if a module type is registered."""
-    return type_id in _registry
-
-
-def get_registry_stats() -> Dict[str, Any]:
-    """Get statistics about the registry for debugging."""
-    return {
-        "total_modules": len(_registry),
-        "module_types": list(_registry.keys()),
-        "offline_modules": [m.type_id for m in _registry.values() if m.offline],
-        "online_modules": [m.type_id for m in _registry.values() if not m.offline],
-    }

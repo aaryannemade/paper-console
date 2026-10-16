@@ -4,12 +4,12 @@ The ESP32 turns its controls into two kinds of events (see docs/relay-protocol.m
 
 * ``position`` — the selected channel position, 1-8 (absolute).
 * ``button`` — a gesture: ``press`` (released before 5 s), ``hold`` (5 s reached,
-  still held), ``hold_release`` (released between 5 and 15 s) or ``long_hold``
-  (15 s reached, still held). Gestures of one physical press share a ``press_id``.
+  still held), or ``hold_release`` (released after a hold). Gestures of one
+  physical press share a ``press_id``.
 
 How the physical control produces these (e.g. a rotary encoder with a push switch)
 is firmware logic. What a gesture *means* — print the channel, choose in a menu,
-cancel, quick actions, reset — is decided here, using server-side state.
+cancel, or quick actions — is decided here, using server-side state.
 
 Each event has an ``event_id``; a retried event returns the original result
 without acting twice. Events are processed one at a time.
@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 MIN_POSITION = 1
 MAX_POSITION = 8
 
-Gesture = Literal["press", "hold", "hold_release", "long_hold"]
-GESTURES = ("press", "hold", "hold_release", "long_hold")
+Gesture = Literal["press", "hold", "hold_release"]
+GESTURES = ("press", "hold", "hold_release")
 
 
 class ChannelSelector:
@@ -150,11 +150,9 @@ class InputProcessor:
         if event.type == "position":
             return "position_set"
 
-        if event.gesture in ("hold_release", "long_hold") and (
-            event.press_id in self._consumed_presses
-        ):
-            # This press already cancelled a print (or triggered a reset); its
-            # release must not also open Quick Actions or escalate.
+        if event.gesture == "hold_release" and event.press_id in self._consumed_presses:
+            # This press already cancelled a print; its release must not open
+            # Quick Actions.
             return "ignored_consumed"
 
         handler = self._handlers.get(event.gesture)
@@ -166,10 +164,7 @@ class InputProcessor:
             logger.exception("Device gesture %s failed", event.gesture)
             return "error"
 
-        if (event.gesture, result) in (
-            ("hold", "cancel_requested"),
-            ("long_hold", "factory_reset"),
-        ):
+        if (event.gesture, result) == ("hold", "cancel_requested"):
             self._consumed_presses.append(event.press_id)
         return result
 

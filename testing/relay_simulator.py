@@ -135,7 +135,7 @@ class RelaySimulator:
         self.httpd = ThreadingHTTPServer((self.host, self.port), self._handler_class())
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
-        for target in (self.httpd.serve_forever, self._uart_loop, self._heartbeat_loop):
+        for target in (lambda: self.httpd.serve_forever(poll_interval=0.05), self._uart_loop, self._heartbeat_loop):
             thread = threading.Thread(target=target, daemon=True)
             thread.start()
             self._threads.append(thread)

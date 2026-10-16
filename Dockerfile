@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && groupadd --gid 1000 paper \
     && useradd --uid 1000 --gid paper --no-create-home --home-dir /data paper
 
+# Application code and bundled assets are image-owned; writable application
+# state (settings, generated password, saves) belongs only under /data.
 COPY app/ ./app/
 COPY icons/ ./icons/
 COPY --from=frontend /build/web/dist/ ./web/dist/
