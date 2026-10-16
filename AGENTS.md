@@ -11,10 +11,6 @@ Rules:
 - If instructions conflict, prefer: explicit user chat instructions, then `AGENTS.md`, then `readme.md`.
 - Do not copy large sections of `readme.md` into responses unless explicitly requested; summarize relevant parts.
 
-## Production Release Workflow
-
-For production OTA artifacts (non-git device updates), use `scripts/release_build.py` and follow `scripts/RELEASE.md`.
-
 ## Print Outputs
 
 `PC1_PRINTER_OUTPUT` selects where receipts go: `esp32` (production default), `console` (default for `just backend` and tests) or `usb` (development only). All outputs share `app/drivers/printer_raster.py`, so a console/PNG capture is the exact bitmap a printer receives. To capture receipts from a live server, set `PC1_PRINT_CAPTURE_DIR`. Keep CSN-A2 byte encoding in `app/drivers/escpos.py`, not in an output. To exercise the production `esp32` output locally, run `PC1_PRINTER_OUTPUT=esp32 just backend` with `just relay-sim` (`testing/relay_simulator.py`, the reference device implementation of `docs/relay-protocol.md`); keep the simulator in step with protocol changes.

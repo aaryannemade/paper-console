@@ -1,7 +1,6 @@
 """Regression tests for hardware/network failure paths."""
 
 import asyncio
-import importlib.util
 import json
 import subprocess
 import sys
@@ -727,62 +726,6 @@ def test_history_module_does_not_download_when_local_db_is_missing(monkeypatch):
     assert events == ["Offline history database is missing."]
 
 
-def test_release_build_validates_required_runtime_assets(monkeypatch):
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "release_build.py"
-    spec = importlib.util.spec_from_file_location("release_build_test_module", script_path)
-    release_build = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(release_build)
-
-    monkeypatch.setattr(release_build, "REQUIRED_RUNTIME_PATHS", ["missing/offline.json"])
-
-    try:
-        release_build.validate_runtime_assets()
-        raise AssertionError("Expected runtime asset validation to fail")
-    except FileNotFoundError as exc:
-        assert "missing/offline.json" in str(exc)
-
-
-def test_release_build_normalizes_mounted_windows_temp_env(monkeypatch):
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "release_build.py"
-    spec = importlib.util.spec_from_file_location("release_build_test_module", script_path)
-    release_build = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(release_build)
-
-    monkeypatch.setattr(release_build.os, "name", "posix", raising=False)
-    monkeypatch.setenv("TEMP", "/mnt/c/Users/test/AppData/Local/Temp")
-    monkeypatch.setenv("TMP", "/mnt/c/Users/test/AppData/Local/Temp")
-    monkeypatch.delenv("TMPDIR", raising=False)
-
-    env, normalized = release_build.build_subprocess_env()
-
-    assert normalized is True
-    assert env["TMPDIR"] == "/tmp"
-    assert env["TEMP"] == "/tmp"
-    assert env["TMP"] == "/tmp"
-
-
-def test_release_build_preserves_local_temp_env(monkeypatch):
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "release_build.py"
-    spec = importlib.util.spec_from_file_location("release_build_test_module", script_path)
-    release_build = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(release_build)
-
-    monkeypatch.setattr(release_build.os, "name", "posix", raising=False)
-    monkeypatch.setenv("TMPDIR", "/tmp/pc1-tests")
-    monkeypatch.setenv("TEMP", "/tmp/pc1-tests")
-    monkeypatch.setenv("TMP", "/tmp/pc1-tests")
-
-    env, normalized = release_build.build_subprocess_env()
-
-    assert normalized is False
-    assert env["TMPDIR"] == "/tmp/pc1-tests"
-    assert env["TEMP"] == "/tmp/pc1-tests"
-    assert env["TMP"] == "/tmp/pc1-tests"
-
-
 def test_selection_mode_ignores_overlapping_callbacks():
     import threading
     import app.selection_mode as selection_mode
@@ -993,7 +936,6 @@ def test_application_reset_keeps_password_and_runs_no_host_commands(monkeypatch,
     fake_config_file = tmp_path / "app" / "config.py"
     fake_config_file.parent.mkdir()
     (tmp_path / "config.json.bak").write_text("{}", encoding="utf-8")
-    (tmp_path / ".welcome_printed").write_text("1", encoding="utf-8")
     monkeypatch.setattr(config_module, "__file__", str(fake_config_file))
     monkeypatch.setattr(config_module, "save_config", saved.append)
     monkeypatch.setattr(config_module, "settings", config_module.Settings(city_name="Old"))
@@ -1011,7 +953,6 @@ def test_application_reset_keeps_password_and_runs_no_host_commands(monkeypatch,
     assert main_module.settings is config_module.settings
     assert main_module.settings.city_name != "Old"
     assert not (tmp_path / "config.json.bak").exists()
-    assert not (tmp_path / ".welcome_printed").exists()
     import app.device_password as device_password
     assert device_password.get_device_password() == "unchanged-password"
 

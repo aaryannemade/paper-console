@@ -9,11 +9,7 @@ import app.main as main
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("previous_boot", [False, True])
-async def test_startup_is_independent_of_host_networking(monkeypatch, tmp_path, previous_boot):
-    marker = tmp_path / ".welcome_printed"
-    if previous_boot:
-        marker.write_text("1")
+async def test_startup_is_independent_of_host_networking(monkeypatch):
     monkeypatch.setenv("PC1_DEVICE_PASSWORD", "server-test-password")
 
     host_commands = []
@@ -59,4 +55,3 @@ async def test_startup_is_independent_of_host_networking(monkeypatch, tmp_path, 
     main.printer.print_body.assert_not_called()
     shutdown.assert_awaited_once()
     assert asyncio.all_tasks() == tasks_before
-    assert marker.exists() == previous_boot

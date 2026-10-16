@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def perform_factory_reset() -> dict:
-    """Persist defaults and remove legacy backups/boot markers.
+    """Persist defaults and remove the old configuration backup.
 
     Preserve the server password so a physical reset cannot change authentication.
     Callers must publish config_module.settings to their runtime after success.
@@ -24,11 +24,11 @@ def perform_factory_reset() -> dict:
 
     config_module.settings = defaults
     base_dir = Path(config_module.__file__).resolve().parents[1]
-    for name in ("config.json.bak", ".welcome_printed"):
+    for name in ("config.json.bak",):
         try:
             (base_dir / name).unlink(missing_ok=True)
         except OSError as exc:
             errors.append(f"Failed to remove {name}: {exc}")
-            logger.warning("Could not remove legacy reset data %s", name, exc_info=True)
+            logger.warning("Could not remove reset data %s", name, exc_info=True)
 
     return {"config_cleared": True, "errors": errors}

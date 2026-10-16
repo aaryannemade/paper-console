@@ -36,7 +36,7 @@ def _host_is_private_or_local(host: str) -> bool:
     lowered = (host or "").strip().lower()
     if not lowered:
         return False
-    if lowered in {"localhost", "pc-1.local"}:
+    if lowered == "localhost" or lowered.endswith(".local"):
         return True
 
     try:

@@ -13,10 +13,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from pydantic import BaseModel
 import subprocess
-import platform
 import pytz
 import logging
-import re
 import time
 
 # Configure logging
@@ -32,20 +30,11 @@ logging.basicConfig(
     force=True,
 )
 
-# Keep noisy dependency logs quiet on embedded deployments.
+# Keep noisy dependency logs quiet on server deployments.
 for noisy_logger in ("uvicorn.access", "httpx", "urllib3", "asyncio"):
     logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
-
-SEMVER_TAG_RE = re.compile(
-    r"^v(?P<major>0|[1-9]\d*)\."
-    r"(?P<minor>0|[1-9]\d*)\."
-    r"(?P<patch>0|[1-9]\d*)"
-    r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?"
-    r"(?:\+[0-9A-Za-z.-]+)?$"
-)
-
 
 def _parse_cors_origins() -> List[str]:
     """
@@ -65,7 +54,6 @@ def _parse_cors_origins() -> List[str]:
         "http://127.0.0.1",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:8000",
-        "http://pc-1.local",
     ]
 
 
@@ -677,7 +665,7 @@ def _print_channel_config_summary(position: int):
             printer.print_caption("Schedule: none")
 
     printer.print_line()
-    printer.print_caption("Visit http://pc-1.local")
+    printer.print_caption("Open settings in your browser")
     printer.print_caption("to edit this channel.")
     printer.feed(1)
 
@@ -1454,41 +1442,22 @@ async def reload_settings():
 
 
 def _read_system_timezone_info() -> Dict[str, Optional[str] | bool]:
-    """Best-effort lookup of the host OS timezone."""
+    """Best-effort lookup of the container's timezone (no host tools)."""
     try:
-        if platform.system() == "Linux":
-            try:
-                result = subprocess.run(
-                    ["timedatectl", "show", "-p", "Timezone", "--value"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    return {
-                        "timezone": result.stdout.strip(),
-                        "found": True,
-                    }
-            except Exception:
-                logger.debug("timedatectl timezone lookup failed", exc_info=True)
-
-            try:
-                with open("/etc/timezone", "r") as f:
-                    timezone = f.read().strip()
-                    if timezone:
-                        return {
-                            "timezone": timezone,
-                            "found": True,
-                        }
-            except Exception:
-                logger.debug("/etc/timezone fallback lookup failed", exc_info=True)
-
         timezone = os.environ.get("TZ")
         if timezone:
             return {
                 "timezone": timezone,
                 "found": True,
             }
+
+        try:
+            with open("/etc/timezone", encoding="utf-8") as f:
+                timezone = f.read().strip()
+                if timezone:
+                    return {"timezone": timezone, "found": True}
+        except OSError:
+            logger.debug("Container timezone file unavailable", exc_info=True)
 
         return {
             "timezone": None,
@@ -1671,37 +1640,10 @@ async def get_current_version():
 @app.get("/api/location/system-default")
 async def get_system_default_location():
     """
-    Get default location based on system timezone.
-    Reads the system timezone and suggests a location in that timezone.
+    Suggest a location based on the container's timezone.
     """
     try:
-        system_timezone = None
-
-        if platform.system() == "Linux":
-            # Try timedatectl first (most reliable)
-            try:
-                result = subprocess.run(
-                    ["timedatectl", "show", "-p", "Timezone", "--value"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    system_timezone = result.stdout.strip()
-            except Exception:
-                logger.debug("timedatectl system-default lookup failed", exc_info=True)
-
-            # Fallback to /etc/timezone
-            if not system_timezone:
-                try:
-                    with open("/etc/timezone", "r") as f:
-                        system_timezone = f.read().strip()
-                except Exception:
-                    logger.debug("/etc/timezone system-default lookup failed", exc_info=True)
-
-        # Fallback to environment variable
-        if not system_timezone:
-            system_timezone = os.environ.get("TZ")
+        system_timezone = _read_system_timezone_info()["timezone"]
 
         if not system_timezone:
             return {
@@ -2467,7 +2409,7 @@ async def trigger_channel(position: int, *, scheduled: bool = False):
             printer.print_line()
             printer.print_text("This channel is empty.")
             printer.print_text("")
-            printer.print_text("Visit http://pc-1.local")
+            printer.print_text("Open settings in your browser")
             printer.print_text("to set it up.")
             printer.feed(1)
 

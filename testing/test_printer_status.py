@@ -80,7 +80,7 @@ def test_status_is_public_and_sends_no_serial_commands(monkeypatch):
                 "type": "http", "asgi": {"version": "3.0"},
                 "http_version": "1.1", "method": "GET", "scheme": "http",
                 "path": "/api/printer/status", "query_string": b"", "headers": [],
-                "client": ("127.0.0.1", 12345), "server": ("pc-1.local", 80),
+                "client": ("127.0.0.1", 12345), "server": ("localhost", 80),
             },
             receive, send,
         )

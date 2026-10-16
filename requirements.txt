@@ -11,7 +11,7 @@ astral
 beautifulsoup4
 croniter
 
-# Hardware drivers (optional - only needed on Raspberry Pi)
+# USB-serial development printer and receipt QR rendering
 pyserial
 qrcode[pil]
 jsonschema

@@ -1,7 +1,7 @@
 # Container + ESP32-S3 migration plan
 
-Status: architecture confirmed; Steps 1–3 (container side) implemented. Next:
-Step 4 (container packaging). ESP32 firmware is Step 6. Printer UART
+Status: architecture confirmed; Steps 1–3 (container side) and 5 (legacy removal)
+implemented. Next: Step 4 (container packaging). ESP32 firmware is Step 6. Printer UART
 details for the firmware are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
@@ -47,23 +47,19 @@ Scheduled/email/Slack prints use the same server-initiated push without an input
 event. Both endpoints must be reachable on the LAN; Docker port mapping provides
 ESP32-to-server access, and the container needs outbound access to the ESP32.
 
-Protocol implementation will specify paired credentials, job IDs, duplicate input
-and print rejection, bounded payload/chunk sizes, printer width and serial settings,
-busy/cancel/error responses, heartbeat expiry, offline queue policy and restart
-reconciliation. Do not blindly replay a job whose UART delivery is uncertain.
+The container-side protocol specifies shared credentials, job IDs, duplicate
+event/chunk handling, bounded chunks, printer width and serial settings,
+busy/cancel/error responses, heartbeat expiry and restart reconciliation in
+[relay-protocol.md](relay-protocol.md). Do not replay uncertain UART delivery.
 Keep the ESP32 HTTP server responsive during UART transfer so input/heartbeat/status
 traffic does not deadlock while the container is pushing a receipt.
 
-## Current coupling
+## Remaining implementation
 
 | Area | Main locations | Required change |
 | --- | --- | --- |
-| Startup and WiFi | `app/main.py`, `app/wifi_manager.py`, `app/routers/wifi.py` | Remove AP startup/recovery, powersave repair, WiFi APIs and captive portal routes. |
-| Host administration | `app/main.py`, `app/device_password.py`, `app/factory_reset.py` | Remove SSH management, OS password synchronization, clock changes, reboot and in-place device updates. Keep application authentication and settings reset. |
-| Physical controls | `app/hardware.py`, `app/drivers/*gpio*.py`, `app/selection_mode.py`, `app/main.py` | Remove hardware autodetection and local button/dial lifecycle; represent needed interactions through HTTP. |
-| Printer transport/rendering | `app/drivers/printer_serial.py`, `app/printer_uart.py`, `testing/render_all_prints.py` | Separate reusable layout/raster rendering from serial/GPIO and UART boot migration. The serial driver contains rendering code, so deleting it wholesale would lose functionality. |
-| UI | `web/src/App.jsx`, `web/src/WiFiSetup.jsx`, `web/src/components/APInstructionsModal.jsx`, `web/src/components/GeneralSettings.jsx` | Remove WiFi onboarding and host administration controls; retain content/channel settings and print controls. |
-| Deployment | `scripts/setup_pi.sh`, `scripts/wifi_ap_nmcli.sh`, `scripts/prepare_golden_image.sh`, `scripts/deploy_automated.py`, `run.sh`, `requirements-pi.txt`, `raspberry_pi/` | Replace Pi installation and service management with container packaging. Review device OTA release scripts/workflows and documentation. |
+| Container packaging | `app/config.py`, `app/device_password.py`, `web/` | Add a multi-stage image, mounted data directory, non-root runtime, Compose example and health check. |
+| ESP32 firmware | [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implement the reference protocol and hardware UART on the chosen ESP32-S3 board. |
 
 ## Step 1 — Remove WiFi provisioning end to end
 
@@ -162,21 +158,25 @@ firmware will have to pass in Step 6.
   state under a configurable mounted data directory.
 - Add Compose configuration with port mapping, persistent volume, configuration
   examples and an HTTP health check. Container updates replace the image.
-- Use direct Uvicorn startup without reload or `run.sh` process-killing behavior.
+- Use direct Uvicorn startup without reload; the development `just backend`
+  recipe uses reload and is not the container entrypoint.
 
 Acceptance: build/run without privileged mode or host network management; UI/API
 available through the mapped port; settings survive container recreation; graceful
 shutdown; smoke test a mock print via HTTP from outside the container.
 
-## Step 5 — Remove obsolete deployment material and finalize docs
+## Step 5 — Remove obsolete deployment material and finalize docs (implemented before Step 4)
 
 - Remove Pi requirements, provisioning/imaging/deployment scripts, device OTA
-  artifacts/workflows and hardware-only tests after their replacements pass.
+  artifacts/workflows and hardware-only tests now that the server-side relay and
+  simulator cover the old runtime path.
 - Update README, agent instructions, dependency lists and snapshot helpers for
   container development/deployment and the ESP32 protocol.
-- Add CI checks for backend tests, frontend build and container smoke tests.
-- Verify no remaining runtime paths rely on Pi files, GPIO, `nmcli`, `sudo`,
-  `systemctl`, `raspi-config`, `chpasswd` or host filesystem mutation.
+- Add CI checks for backend tests and frontend lint/build; add container smoke
+  tests once Step 4 provides an image.
+- Verify no remaining runtime paths administer the host through Pi files, GPIO,
+  `nmcli`, `sudo`, `systemctl`, `raspi-config` or `chpasswd`. Application settings
+  and credentials remain writable pending the Step 4 mounted-data directory.
 
 ## Step 6 — ESP32-S3 firmware
 
@@ -230,10 +230,8 @@ privileged host commands in `app/`, password resolution/persistence/permissions,
 cookie-forgery and non-ASCII password tests; frontend lint/build; live server smoke
 test (see below).
 
-Left for later steps: GPIO drivers and Pi detection in `app/hardware.py`
-(Step 3); `run.sh` service handling, `scripts/setup_pi.sh`, release/OTA build
-scripts and workflow (Step 5). `GET /api/system/timezone` and the location default
-still try read-only `timedatectl show`, which falls back cleanly in a container.
+The GPIO drivers and Pi detection were removed in Step 3. The remaining service,
+imaging and release scripts and `timedatectl` probes were removed in Step 5.
 
 Step 3a result: `app/drivers/printer_serial.py` became `printer_raster.py`
 (`RasterPrinter`), a renderer with no I/O that hands one bitmap per receipt to a
@@ -303,7 +301,7 @@ the print job. `testing/relay_simulator.py` (`just relay-sim`) is the reference
 device: it writes records at the simulated baud rate, decodes the raster back to
 PNG and reports status.
 
-Verification: 350 backend tests, including 30 relay tests with real HTTP in
+Verification at Step 3: 350 backend tests, including 30 relay tests with real HTTP in
 both directions: byte-exact round trip, small chunks with a full buffer,
 cancel between records, lost callbacks covered by polling, reboot mid-job
 without replay, unreachable and recovered, busy, token mismatch, feeds,
@@ -313,5 +311,17 @@ through the simulator. Live at 9600 baud: a button press printed Sudoku in 26.2 
 cancelled by hold after 6 strips; an every-minute schedule printed through the
 relay; the device going away gave one logged failure and then 503, and it
 recovered on the next heartbeat.
+
+Step 5 result: removed Pi requirements, setup, imaging and SSH deployment
+scripts/docs/config, the in-place OTA release builder/workflow and its three
+tests. Removed the obsolete service launcher `run.sh`; use `just backend` for
+development and a direct Uvicorn command for Step 4 packaging. Removed host `timedatectl`
+probes; timezone discovery now reads `TZ` or the container's `/etc/timezone`.
+The README, icon validator, test instructions and CI now reflect the server/relay
+paths. The old Pi pin assignments remain only in the UART reference as historical
+context for Step 6. Verification: 347 backend tests (three obsolete release
+builder tests, one first-boot variant, and the launcher test removed; guard tests added),
+frontend lint/build and icon validator. Container
+packaging and container smoke CI remain Step 4.
 
 Next implementation: Step 4 (container packaging and persistence).

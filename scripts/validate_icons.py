@@ -27,13 +27,13 @@ else:
 
 print(f"Loaded {len(available_icons)} available icons from icons.txt\n")
 
-# Extract icon alias mapping from printer_serial.py
-printer_serial_file = project_root / "app" / "drivers" / "printer_serial.py"
+# Extract icon alias mapping from the shared raster renderer.
+printer_raster_file = project_root / "app" / "drivers" / "printer_raster.py"
 icon_map = {}
 direct_references = set()
 
-if printer_serial_file.exists():
-    with open(printer_serial_file, "r", encoding="utf-8") as f:
+if printer_raster_file.exists():
+    with open(printer_raster_file, "r", encoding="utf-8") as f:
         content = f.read()
 
         # Extract either legacy `icon_map` or current `icon_aliases` dictionary.

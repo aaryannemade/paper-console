@@ -837,6 +837,7 @@ class RasterPrinter:
             "floppy": "floppy-disk",
             "checkmark": "check",
             "check": "check",
+            "alert": "warning-circle",
             "close": "x",
             "delete": "trash",
             "refresh": "arrows-clockwise",

@@ -2,7 +2,7 @@
 
 Not used in production (the ESP32 drives the printer there). Wire the adapter's
 TX to the printer's RX (and optionally RX to TX for status replies), at TTL level.
-The Raspberry Pi DTR busy line is not supported over USB; pacing relies on the
+The printer's DTR busy line is not available over USB; pacing relies on the
 128-byte writes and per-strip flushes described in docs/printer-uart-reference.md.
 
 ``PC1_PRINTER_PORT`` selects the port (default: first /dev/serial/by-id,

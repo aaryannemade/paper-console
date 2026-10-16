@@ -25,7 +25,6 @@ pnpm-debug.log*
 # Build outputs (the settings UI is built locally or in the container image)
 web/dist/
 web/dist-ssr/
-release-artifacts/
 *.local
 
 # Configuration & Secrets
@@ -36,9 +35,6 @@ config.json.bak
 .env.local
 .env.*.local
 .welcome_printed
-
-# Development (internal production tools & images)
-development/
 
 # IDE
 .vscode/
@@ -62,10 +58,6 @@ Desktop.ini
 *.log
 logs/
 
-# Raspberry Pi specific
-raspberry_pi/*.exe
-raspberry_pi/*.img
-
 # Temporary files
 *.tmp
 testing/artifacts/
@@ -79,9 +71,6 @@ app/data/*.zip
 app/data/*.txt
 !app/data/__init__.py
 
-# Generated documentation
-docs/raspberry-pi-config-full.md
-
 # Cursor IDE files
 .cursorrules
 
@@ -89,10 +78,3 @@ docs/raspberry-pi-config-full.md
 .claude/
 .codex
 .codex/
-
-# Deployment scripts (local use only)
-deploy.bat
-deploy.sh
-
-# Deployment configuration (contains Pi connection details)
-.deploy_config

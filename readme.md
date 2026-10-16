@@ -2,11 +2,11 @@
 
 **A small, self-hosted thermal printer for news, weather, puzzles, email, and more.**
 
-> This fork is migrating to a container + ESP32-S3 architecture. The container
-> handles application logic and pushes print commands over HTTP; the ESP32 will
-> provide WiFi setup/link-status UI, relay physical inputs over HTTP, and drive a
-> CSN-A2 printer over TTL UART. See the [migration plan](docs/container-esp32-plan.md)
-> for implementation progress. ESP32 transport/firmware is not implemented yet.
+> This fork is migrating to a container + ESP32-S3 architecture. The server
+> handles application logic and pushes print commands over HTTP. The ESP32-S3
+> firmware will provision WiFi, relay physical inputs, and drive a CSN-A2 printer
+> over TTL UART. The server-side relay works with the simulator; firmware and
+> container packaging are still planned. See the [migration plan](docs/container-esp32-plan.md).
 
 ---
 
@@ -18,40 +18,27 @@
 For more information and build photos, visit [travismiller.design/paper-console](https://travismiller.design/paper-console).
 
 ![PC-1 Front View](images/pc-1_front2.jpg)
-*Front view showing the brass rotary dial, push button, and thermal paper output*
+*Original hardware prototype; ESP32-S3 hardware and wiring are planned for Step 6.*
 
 ---
 
 ## 1. Quick Start (Software)
 
-Run the entire system on your PC without hardware to test logic and see "printer" output in the terminal.
-Use a Unix-like shell for project commands: Linux, macOS, or WSL on Windows
-
-**Backend:**
+Run locally without hardware using a Unix-like shell (WSL on Windows). With
+Nix and flakes enabled:
 
 ```bash
-./run.sh
+nix develop
+export PC1_DEVICE_PASSWORD='choose-your-local-server-password'
+just backend                    # API on http://localhost:8000; console receipts
 
-# Or run directly
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# In another terminal (also inside nix develop):
+just frontend-install           # First run only
+just frontend                   # Settings UI on http://localhost:5173
 ```
 
-* **API Docs:** 
-  * Local: [http://localhost:8000/docs](http://localhost:8000/docs)
-* **Print output:** With `just backend` (console output) receipts are logged in the terminal; see [Print outputs](#print-outputs).
-
-**Frontend (Settings UI):**
-```bash
-cd web
-npm install
-npm run dev
-```
-* **URL:** [http://localhost:5173](http://localhost:5173)
-
-**Tests:**
-```bash
-./testing/run_tests.sh
-```
+See [Print outputs](#print-outputs) for USB printing and the ESP32 relay
+simulator. API docs are available at [http://localhost:8000/docs](http://localhost:8000/docs).
 
 ### First Use (This Fork)
 
@@ -161,9 +148,8 @@ The flake provides `just`, Python 3.12, the application/test dependencies, Node.
 `npm ci` separately installs the frontend dependencies.
 
 The recipes use Python from the shell rather than
-`testing/run_tests.sh`, which creates a pip-managed `.venv`. Likewise, `run.sh`
-prefers an existing `.venv`, so the backend recipe ensures it uses the
-Nix-provided Python. Enter the shell without an activated virtual environment.
+`testing/run_tests.sh`, which creates a pip-managed `.venv`. Enter the shell
+without an activated virtual environment to use the Nix-provided Python.
 No `.venv` is created or modified by the flake. If Python requirements change,
 update the package list in `flake.nix` as well.
 
@@ -184,92 +170,33 @@ cd web && npm install
    ```bash
    ./.venv/bin/python -m pip install -r requirements-dev.txt
    ```
-   This installs the app dependencies plus test tooling. It intentionally excludes Raspberry Pi-only GPIO packages.
+    This installs the app dependencies, USB printer support, and test tooling.
 
 2. **Run the Server:**
    ```bash
-   ./run.sh
-   # Or: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    PC1_PRINTER_OUTPUT=console ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
    ```
 
-### Docker (Software-Only / Mock Printer)
+### Container packaging
 
-If you want to run PC-1 without Raspberry Pi hardware, you can also run the app in Docker and use the built-in terminal "printer" output for testing.
-
-1. **Create a `Dockerfile` in the repo root:**
-   ```Dockerfile
-   FROM python:3.12-bookworm
-
-   WORKDIR /paper-console
-
-   COPY . .
-
-   RUN apt update && apt install -y sudo npm nodejs network-manager
-
-   RUN pip install Pillow
-   RUN pip install fastapi uvicorn[standard] pydantic requests
-   RUN pip install feedparser icalendar pytz python-dateutil astral beautifulsoup4
-   RUN pip install pytest
-
-   RUN python3 -m venv .venv; ./.venv/bin/python -m pip install -r requirements-dev.txt
-
-   ENTRYPOINT ["./run.sh"]
-   ```
-
-2. **Build the image:**
-   ```bash
-   docker buildx build -t local/pc-1 .
-   ```
-
-3. **Run the container:**
-   ```bash
-   docker run --rm -it -p 8000:8000 local/pc-1
-   ```
-
-4. **Open the app:**
-   Visit `http://localhost:8000` in your browser.
-
-5. **Set the server password:**
-   Pass `-e PC1_DEVICE_PASSWORD=...` to `docker run` and use it to log in. (Proper
-   container packaging is planned in Step 4 of the migration plan.)
-
-6. **Use the mock printer:**
-   When you print a channel from the web UI, the output appears in the terminal running the container.
-
-### Raspberry Pi Deployment
-
-1. **Install Python Dependencies:**
-   ```bash
-   ./.venv/bin/python -m pip install -r requirements-pi.txt
-   ```
-
-2. **Run Setup Script:**
-   ```bash
-   cd ~/paper-console
-   chmod +x scripts/setup_pi.sh
-   sudo scripts/setup_pi.sh
-   ```
-   The script will:
-   - Set hostname (default: `pc-1`)
-   - Install Nginx (web proxy) and Avahi (mDNS)
-   - Configure systemd service
-   - Add user to `lp` group for printer access
-
-3. **Access the Device:**
-   Open your browser and go to `http://pc-1.local` (or your chosen hostname).
+An official Dockerfile and Compose configuration are planned in Step 4. Until
+then, run the server directly as shown above. To test the production HTTP print
+path without firmware, start `PC1_PRINTER_OUTPUT=esp32 just backend` and
+`just relay-sim` in separate terminals with the same `PC1_RELAY_TOKEN`.
 
 ---
 
 ## 3. Configuration
 
-Configuration is handled entirely via the **Web UI** at `http://pc-1.local` (or `http://localhost:8000`).
+Configuration is handled via the **Web UI** at `http://localhost:5173` in development,
+or the server address after running `just frontend-build`.
 
 ### Global Settings
 * **Location:** City name, Latitude, Longitude, Timezone (with search functionality)
 * **Time Format:** 12-hour (AM/PM) or 24-hour format
 
 ### Channel System
-* **8 Channel Positions:** Each position (1-8) represents a slot on the rotary dial
+* **8 Channel Positions:** Each position (1-8) is a selectable channel reported by the ESP32 input protocol
 * **Modular System:** Channels are containers. You can assign **multiple modules** to a single channel (e.g., "News" followed by "Weather" followed by "Sudoku")
 * **Reordering:** 
   * **Channels:** Use Up/Down arrows next to Channel title to swap entire channels
@@ -300,13 +227,13 @@ busy until completion or cancellation cleanup. Clients must still handle HTTP
 as well as the endpoint's authentication and content validation errors.
 
 ### Local Validation Workflows
-For non-Pi development, use the local test and snapshot workflows:
+Use the local test and snapshot workflows:
 
 * **Pytest:** `./testing/run_tests.sh`
 * **Print snapshots:** `./.venv/bin/python testing/render_all_prints.py --output-dir testing/artifacts/print`
 * **Settings UI snapshots:** `./.venv/bin/python testing/render_settings_ui.py --output-dir testing/artifacts/ui`
 
-These workflows use mock/local paths and do not require Raspberry Pi GPIO packages.
+These workflows run without physical controls or a printer.
 
 ### Security & Network Environment Variables
 For production deployments, configure these environment variables:
@@ -321,27 +248,16 @@ For production deployments, configure these environment variables:
 * **Settings Login Sessions**: The web UI can remember a browser with a signed `HttpOnly` session cookie so users do not need to re-enter the password on every visit.
 * **`PC1_CORS_ORIGINS`**: Comma-separated CORS origins (default is local/dev origins only).
 * **`PC1_LOG_LEVEL`**: Backend log level (default: `WARNING` on device builds).
-* **`UVICORN_LOG_LEVEL`**: Uvicorn log level for `run.sh` (default: `warning`).
-* **`UVICORN_ACCESS_LOG`**: Set to `1` to enable HTTP access logs (default: `0` for lower log volume).
 
-### Production Release Artifacts
-
-For non-git production units, build versioned release artifacts with:
-
-```bash
-./.venv/bin/python scripts/release_build.py --version v1.2.3 --build-web
-```
-
-In-place OTA updates were removed from the server in this fork; updates will ship
-as container images (Step 4). These scripts are legacy Pi tooling slated for removal
-in Step 5. See `scripts/RELEASE.md` for the current stable and beta release paths, including the tag-driven GitHub publish workflow, the recommended `main` and `beta` branch lanes, and hotfix guidance for stable OTA releases.
+Container image releases are planned for Step 4; the old in-place device update
+and imaging workflows have been removed.
 
 ---
 
 ## 4. Architecture & Modules
 
 ### Tech Stack
-* **OS:** Raspberry Pi OS Lite (64-bit)
+* **OS:** Linux server or development host (container packaging planned)
 * **Backend:** Python 3.12 + FastAPI
 * **Frontend:** React + Vite + Tailwind CSS v4
 
@@ -349,12 +265,12 @@ in Step 5. See `scripts/RELEASE.md` for the current stable and beta release path
 ```
 paper-console/
 ├── app/
-│   ├── main.py                 # FastAPI app, dial/button loop, print orchestration
+│   ├── main.py                 # FastAPI app, input actions, print orchestration
 │   ├── auth.py                 # Device-password auth and session helpers
 │   ├── config.py               # Settings, channels, schedules, module models
 │   ├── device_password.py      # Server password (env, secret file, or generated)
 │   ├── factory_reset.py        # Application settings reset (no host changes)
-│   ├── hardware.py             # Printer + dial/button singletons
+│   ├── hardware.py             # Printer reservation and channel position
 │   ├── location_lookup.py      # City/timezone lookup helpers
 │   ├── module_registry.py      # @register_module metadata and validation
 │   ├── selection_mode.py       # Position-driven interactive selection flows
@@ -366,13 +282,13 @@ paper-console/
 │   ├── data/                   # Bundled offline content and lookup datasets
 │   ├── drivers/
 │   │   ├── printer_raster.py   # Receipt renderer (bitmap for every output)
-│   │   ├── print_outputs.py    # Output selection; console and esp32 outputs
+│   │   ├── print_outputs.py    # Output selection and console capture
 │   │   ├── usb_serial_output.py # USB-serial printer output (dev only)
 │   │   ├── esp32_relay_output.py # ESP32 relay output (production)
 │   │   ├── escpos.py           # CSN-A2 command encoding (raster strips, feeds)
 │   │   └── printer_mock.py     # [PRINT] text echo for console output and tests
 │   ├── modules/                # Printable module implementations
-│   │   ├── adventure.py        # Interactive CYOA (dial)
+│   │   ├── adventure.py        # Interactive CYOA (channel positions)
 │   │   ├── astronomy.py
 │   │   ├── calendar.py
 │   │   ├── crossword.py
@@ -398,32 +314,23 @@ paper-console/
 │   ├── package.json
 │   └── vite.config.js
 ├── scripts/
-│   ├── setup_pi.sh
-│   ├── release_build.py
-│   ├── prepare_golden_image.sh
-│   ├── deploy_automated.py
-│   ├── validate_icons.py
-│   └── RELEASE.md / DEPLOYMENT.md
+│   └── validate_icons.py      # Validate receipt icon references
 ├── testing/                    # Pytest, print/UI render helpers, snapshot galleries
 │   ├── render_all_prints.py
 │   ├── render_settings_ui.py
 │   ├── console_raster_preview.py
+│   ├── relay_simulator.py      # ESP32 reference device for local tests
 │   ├── run_tests.sh
 │   └── artifacts/
 ├── development/                # BOM, internal docs, supporting scripts
 ├── icons/                      # Icon source assets
 ├── images/                     # Product photos used in the README
-├── raspberry_pi/               # Misc device imaging/install artifacts
 ├── .github/workflows/
 ├── .env.example
-├── .deploy_config.example
 ├── AGENTS.md
 ├── config.json                 # Local settings (gitignored in normal use)
-├── deploy.sh
-├── run.sh
 ├── requirements.txt
 ├── requirements-dev.txt
-├── requirements-pi.txt
 └── readme.md
 ```
 
@@ -469,133 +376,32 @@ paper-console/
 
 ---
 
-## 5. Hardware Setup
+## 5. Printer and Device
 
-### Prerequisites
-1. **Raspberry Pi Zero 2 W** with Raspberry Pi OS Lite installed
-2. **Thermal Printer** (QR204/CSN-A2 or compatible 58mm TTL thermal printer. 30mm diameter paper roll maximum)
-3. **1-Pole 8-Position Rotary Switch**
-4. **Momentary Push Button** (x1)
-5. **Power Supply:** 5V 5A Power Supply (Barrel Jack) -> Terminal Adapter
-
-### Complete Wiring Tables (Component-Based)
-
-This layout organizes connections into logical groups (blocks) for easier assembly with standard connectors (DuPont or JST).
-
-#### 1. Power & Printer Data Block (Top)
-*Use a 4-pin or 5-pin connector block.*
-
-| Pin | GPIO | Function | Wire To |
-| :---: | :---: | :--- | :--- |
-| **2** | 5V | **Power Input (+)** | External PSU 5V (+) |
-| **6** | GND | **Power Input (-)** | External PSU GND (-) |
-| **8** | 14 | **TX (Data)** | Printer RX |
-| **10** | 15 | **RX (Data)** | Printer TX |
-| **12** | 18 | **DTR (Flow)** | Printer DTR |
-| **14** | GND | **Signal GND** | Printer GND |
-
-#### 2. Main Button Block (Middle)
-*Use a 2-pin connector.*
-
-| Pin | GPIO | Function | Wire To |
-| :---: | :---: | :--- | :--- |
-| **20** | GND | **Button GND** | Button Pin 1 |
-| **22** | 25 | **Button Signal** | Button Pin 2 |
-
-#### 3. Rotary Dial Block (Bottom)
-*Use a 12-pin (2x6) connector block.*
-
-| Pin (Left) | GPIO | Function | | Pin (Right) | GPIO | Function |
-| :---: | :---: | :--- | :--- | :---: | :---: | :--- |
-| **29** | 5 | **Pos 1** | \| | **30** | GND | *Unused* |
-| **31** | 6 | **Pos 2** | \| | **32** | 12 | *Unused* |
-| **33** | 13 | **Pos 3** | \| | **34** | GND | *Unused* |
-| **35** | 19 | **Pos 4** | \| | **36** | 16 | **Pos 6** |
-| **37** | 26 | **Pos 5** | \| | **38** | 20 | **Pos 7** |
-| **39** | GND | **Common** | \| | **40** | 21 | **Pos 8** |
-
-### Visual Pin Layout
-Legend: `[X]` = Used, `[ ]` = Empty. The header is 2 pins wide.
-
-```
-      (Pin 1) [ ] [X] (Pin 2)  --> Power 5V (+)
-      (Pin 3) [ ] [ ] (Pin 4)
-      (Pin 5) [ ] [X] (Pin 6)  --> Power GND (-)
-      (Pin 7) [ ] [X] (Pin 8)  --> Printer TX
-      (Pin 9) [ ] [X] (Pin 10) --> Printer RX
-     (Pin 11) [ ] [X] (Pin 12) --> Printer DTR
-     (Pin 13) [ ] [X] (Pin 14) --> Printer GND
-     (Pin 15) [ ] [ ] (Pin 16)
-     (Pin 17) [ ] [ ] (Pin 18)
-     (Pin 19) [ ] [X] (Pin 20) --> Button GND
-     (Pin 21) [ ] [X] (Pin 22) --> Button SIG
-     (Pin 23) [ ] [ ] (Pin 24)
-     (Pin 25) [ ] [ ] (Pin 26)
-     (Pin 27) [ ] [ ] (Pin 28)
-     (Pin 29) [X] [ ] (Pin 30) --> Dial 1
-     (Pin 31) [X] [ ] (Pin 32) --> Dial 2
-     (Pin 33) [X] [ ] (Pin 34) --> Dial 3
-     (Pin 35) [X] [X] (Pin 36) --> Dial 4 | Dial 6
-     (Pin 37) [X] [X] (Pin 38) --> Dial 5 | Dial 7
-     (Pin 39) [X] [X] (Pin 40) --> Dial COM| Dial 8
-```
-
-### Thermal Printer
-
-**TTL Serial Connection:**
-1. Wire according to table above
-2. **Serial port is automatically configured** by `scripts/setup_pi.sh` (disables console, enables hardware)
-3. Device appears as `/dev/serial0` after setup
-
-### Power Supply
-
-**Recommended Setup (Split Power):**
-1.  **Source:** Use a 5V 5A power supply (Barrel Jack).
-2.  **Distribution:** Use a custom PCB HAT or a terminal splitter to feed power to two places simultaneously:
-    *   **To Pi:** Connect to GPIO Pins 2 (5V) and 6 (GND).
-    *   **To Printer:** Connect to the printer's power input cable.
-3.  **Warning:** Do **not** plug the power supply into the Pi's USB port and try to power the printer from the Pi's GPIO pins. The printer draws too much current (up to 4A) and will crash the Pi.
+The server never accesses GPIO or provisions a host serial port. For development,
+use `console`, or attach a CSN-A2 through a USB-to-TTL serial adapter and select
+`PC1_PRINTER_OUTPUT=usb`. For the ESP32 relay protocol, serial framing and
+electrical considerations, see [printer UART reference](docs/printer-uart-reference.md)
+and [relay protocol](docs/relay-protocol.md). ESP32 wiring and firmware belong to
+Step 6; pin assignments will be confirmed for the chosen board.
 
 ---
 
 ## 6. Troubleshooting
 
 ### Printer Issues
-* **Device Not Found:**
-  * Check if `/dev/serial0` exists: `ls -l /dev/serial*`
-  * If missing, run setup script: `sudo scripts/setup_pi.sh` (configures serial automatically)
-  * Or manually: `sudo raspi-config` → Interface Options → Serial Port → Enable hardware, Disable console
-* **Permission Denied:**
-  * Ensure user is in `dialout` group: `groups`
-  * Add user: `sudo usermod -a -G dialout $USER` (then log out/in)
-* **Nothing Prints:**
-  * Verify power supply is adequate (5A minimum)
-  * Confirm printer is connected to correct GPIO pins using the wiring table above
-  * Make sure the printer is powered on (indicator lights as expected)
-  * Check for error/status lights or messages on the printer itself (if available)
-  * Test the printer with a simple echo command: `echo "test" > /dev/serial0`
-  * Check service logs: `sudo journalctl -u pc-1.service -f`
-  * Confirm no other application is holding the serial port open (use `lsof /dev/serial0`)
+* **Relay offline:** Check `GET /api/printer/link` or Printer Connection in General
+  Settings. Start `just relay-sim` to exercise the HTTP relay without firmware.
+* **USB printer not found:** Check `PC1_PRINTER_PORT`, adapter power and serial
+  access permissions; most Linux distributions use the `dialout` group.
+* **No output in development:** Start with `PC1_PRINTER_OUTPUT=console just backend`
+  and watch the `[PRINT]` and `[RECEIPT]` log entries.
 
-### Service Issues
-  * **Restart Loop:**
-  * Service uses `run.sh` to handle port conflicts automatically
-  * Restart: `sudo systemctl restart pc-1.service`
-  * Check logs: `sudo journalctl -u pc-1.service -f`
-  * **Port Already in Use:**
-  * `run.sh` automatically kills zombie processes
-  * If persistent, reboot: `sudo reboot`
-  * **Log Storage:**
-  * Setup script configures journald in RAM (`Storage=volatile`) with a bounded budget (`RuntimeMaxUse=16M`).
-  * This minimizes SD writes and prevents long-term log growth on disk.
-  * Setup script also installs `pc1-storage-guard.timer` (runs every 6 hours) to trim journals/cache if root usage rises.
-  * Core dumps are disabled (`/etc/systemd/coredump.conf.d/pc-1.conf`) to prevent multi-megabyte crash artifacts.
-  * Check current journal usage: `journalctl --disk-usage`
-  * Check storage guard timer: `systemctl status pc1-storage-guard.timer`
-  * Run storage guard immediately: `sudo systemctl start pc1-storage-guard.service`
-  * Temporarily enable more logs for debugging by setting:
-    * `PC1_LOG_LEVEL=INFO`
-    * `UVICORN_ACCESS_LOG=1`
+### Server Issues
+* **Port in use:** Stop the process already bound to the port, or supply a
+  different port to `just backend`, e.g. `just backend 127.0.0.1 8001`.
+* **More diagnostic logs:** Set `PC1_LOG_LEVEL=INFO`; for Uvicorn logs,
+  run `python -m uvicorn app.main:app --log-level info --access-log` inside `nix develop`.
 
 ### Module-Specific Issues
 * **NewsAPI Returns 0 Articles:** Check if API key is valid and on free tier

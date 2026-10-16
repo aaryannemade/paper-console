@@ -23,10 +23,9 @@ REMOVED_ROUTES = {
     ("POST", "/api/system/reboot"),
 }
 
-# Commands that change host state. Read-only probes (e.g. "timedatectl show",
-# "git rev-parse") are allowed.
+# Commands that change host state; read-only "git rev-parse" is allowed.
 FORBIDDEN_COMMAND = re.compile(
-    r'"sudo"|systemctl|chpasswd|raspi-config|"reboot"|nmcli|hwclock|ntpdate|'
+    r'"sudo"|systemctl|timedatectl|chpasswd|raspi-config|"reboot"|nmcli|hwclock|ntpdate|'
     r"set-ntp|set-timezone|\"date\",\s*\"-s\""
 )
 
@@ -64,6 +63,23 @@ def test_pi_uart_migration_is_removed():
     assert not (PROJECT_ROOT / "scripts" / "wifi_ap_nmcli.sh").exists()
     # Kept for the ESP32 firmware step.
     assert (PROJECT_ROOT / "docs" / "printer-uart-reference.md").exists()
+
+
+def test_legacy_device_tooling_is_removed():
+    for path in (
+        "requirements-pi.txt",
+        ".deploy_config.example",
+        ".github/workflows/release-artifacts.yml",
+        "scripts/setup_pi.sh",
+        "scripts/prepare_golden_image.sh",
+        "scripts/deploy_automated.py",
+        "scripts/release_build.py",
+        "scripts/DEPLOYMENT.md",
+        "scripts/RELEASE.md",
+        "scripts/RELEASE_NOTES_TEMPLATE.md",
+        "run.sh",
+    ):
+        assert not (PROJECT_ROOT / path).exists(), path
 
 
 def test_frontend_does_not_call_host_administration_endpoints():

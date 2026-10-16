@@ -85,7 +85,7 @@ class QRCodeConfig(BaseModel):
     """Configuration for QR code generation."""
     model_config = ConfigDict(extra="ignore")
     qr_type: str = "url"  # text, url, wifi, contact, phone, sms, email
-    content: str = "https://pc-1.local"  # Main content (URL, text, phone number, etc.)
+    content: str = "https://example.com"  # Main content (URL, text, phone number, etc.)
     
     # WiFi-specific fields
     wifi_ssid: str = ""

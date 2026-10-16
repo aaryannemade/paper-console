@@ -13,7 +13,7 @@ This script will:
 2. Install `requirements-dev.txt` (local/dev dependencies only)
 3. Run `pytest` against `testing/`
 
-Pi-only GPIO dependencies are installed via `requirements-pi.txt` and are not part of the local test workflow.
+The test suite uses the console print output and needs no local printer or device GPIO.
 
 Generate console dot-map previews (useful for printer layout debugging):
 
@@ -34,7 +34,6 @@ Unified print snapshot renderer:
 ./.venv/bin/python testing/render_all_prints.py --channel 3
 ./.venv/bin/python testing/render_all_prints.py --module-id default-weather-001
 ./.venv/bin/python testing/render_all_prints.py --module-type astronomy
-./.venv/bin/python testing/render_all_prints.py --system setup
 ./.venv/bin/python testing/render_all_prints.py --module-type astronomy --output testing/artifacts/debug/astronomy_debug.png
 
 # Optional

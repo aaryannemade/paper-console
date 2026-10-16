@@ -57,7 +57,7 @@ const PrintWebhookHelp = ({ rootValue = {} }) => {
   const endpointPath =
     normalizePrintWebhookEndpointPath(rootValue.endpoint_path) || 'your-endpoint';
   const token = rootValue.token || '';
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://pc-1.local';
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000';
   const endpointUrl = `${origin}/hook/${endpointPath}`;
   const authHeader = token
     ? `-H 'Authorization: Bearer YOUR_TOKEN_HERE' \\\n`
