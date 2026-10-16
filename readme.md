@@ -230,11 +230,25 @@ volumes:
 ```
 
 Replace `/path/to/data` in `docker-compose.yaml` or `portainer-compose.yaml`
-with a real absolute directory on your Docker host. Create it and make it
-writable by UID/GID 1000:1000 (for example, `mkdir -p /srv/paper-console &&
-sudo chown 1000:1000 /srv/paper-console`). If migrating local settings, copy
-`config.json` and any `app/data/adventure_saves/` files there **before** starting
-the container. Do not put credentials in the image.
+with a real absolute directory on your Docker host. Both Compose files set
+`userns_mode: keep-id`, which maps the container's UID 1000 to your host UID
+inside the bind mount, so any directory you own (or can create) is writable
+without `chown`. Example:
+
+```bash
+mkdir -p /srv/paper-console
+# Edit docker-compose.yaml: replace /path/to/data with /srv/paper-console
+docker compose -f docker-compose.yaml up -d
+```
+
+If your host is **NixOS**, the first user is `uid 1000` and **`gid 100`**
+(`users` group), while the container's non-root user is `1000:1000`.
+`userns_mode: keep-id` remaps the container's UID 1000 to your host UID
+1000, so the container's `paper:paper` (1000:1000) becomes your host user
+(1000:100) inside the volume — exactly what the data directory needs. If
+migrating local settings, copy `config.json` and any
+`app/data/adventure_saves/` files there **before** starting the container. Do
+not put credentials in the image.
 
 **Docker Compose:**
 

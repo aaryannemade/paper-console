@@ -3,6 +3,11 @@ services:
     build: .
     image: paper-console:local
     restart: unless-stopped
+    # NixOS puts the first user in a 1000:100 (uid:gid) pair while the
+    # container's non-root user is 1000:1000. userns_mode: keep-id remaps
+    # the container's UID 1000 to the host UID, so any data directory you
+    # own is writable without chown.
+    userns_mode: keep-id
     ports:
       - "${PC1_HOST_PORT:-8000}:${PC1_PORT:-8000}"
     environment:
