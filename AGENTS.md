@@ -15,6 +15,10 @@ Rules:
 
 `PC1_PRINTER_OUTPUT` selects where receipts go: `esp32` (production default), `console` (default for `just backend` and tests) or `usb` (development only). `usb` prefers the printer's native USB printer-class bulk endpoint (`app/drivers/usb_bulk_printer.py`, PyUSB/libusb); `PC1_PRINTER_PORT` explicitly selects a USB-to-serial adapter. All outputs share `app/drivers/printer_raster.py`, so a console/PNG capture is the exact bitmap a printer receives. To capture receipts from a live server, set `PC1_PRINT_CAPTURE_DIR`. Keep CSN-A2 byte encoding in `app/drivers/escpos.py`, not in an output. To exercise the production `esp32` output locally, run `PC1_PRINTER_OUTPUT=esp32 just backend` with `just relay-sim` (`testing/relay_simulator.py`, the reference device implementation of `docs/relay-protocol.md`); keep the simulator in step with protocol changes.
 
+## Container Runtime
+
+The multi-stage `Dockerfile` serves the built UI and API as UID/GID 1000:1000 with `PC1_DATA_DIR=/data`. `docker-compose.yaml` and `portainer-compose.yaml` both use an absolute host bind mount (`/path/to/data:/data`); replace the example host path before deployment. Settings, generated login password and Adventure saves belong under `/data`; bundled datasets, icons and fonts remain read-only in the image. The container runs one Uvicorn worker because scheduling and printer reservations are process-local. Container printing defaults to `esp32`; use `console` for smoke tests without firmware.
+
 ## Console Raster Preview for Print Debugging
 
 When validating printer output (layout, clipping, alignment, density, or black/white dot rendering), run this feedback loop:

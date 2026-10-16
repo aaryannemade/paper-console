@@ -6,6 +6,9 @@ import os
 import uuid
 import logging
 
+from pathlib import Path
+from app.paths import data_dir
+
 # Constants
 PRINTER_WIDTH = 42
 DEFAULT_CUTTER_FEED_LINES = 5
@@ -350,6 +353,11 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+def get_config_dir() -> Path:
+    """Where settings and their backup live (project root locally, /data in the image)."""
+    return data_dir(Path(__file__).resolve().parents[1])
+
+
 def _try_load_config_file(config_path: str) -> Settings | None:
     """Attempt to load config from a specific file path. Returns None on failure."""
     if not os.path.exists(config_path):
@@ -381,7 +389,7 @@ def _try_load_config_file(config_path: str) -> Settings | None:
 
 def load_config() -> Settings:
     """Load settings from config.json or backup, or return defaults."""
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = str(get_config_dir())
     config_path = os.path.join(base_dir, "config.json")
     backup_path = os.path.join(base_dir, "config.json.bak")
 
@@ -406,7 +414,8 @@ def load_config() -> Settings:
 
 def save_config(new_settings: Settings):
     """Saves the settings object to config.json using atomic write to prevent corruption."""
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = str(get_config_dir())
+    os.makedirs(base_dir, exist_ok=True)
     config_path = os.path.join(base_dir, "config.json")
     backup_path = os.path.join(base_dir, "config.json.bak")
     temp_path = os.path.join(base_dir, "config.json.tmp")

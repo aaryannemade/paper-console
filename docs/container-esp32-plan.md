@@ -1,7 +1,7 @@
 # Container + ESP32-S3 migration plan
 
-Status: architecture confirmed; Steps 1–3 (container side) and 5 (legacy removal)
-implemented. Next: Step 4 (container packaging). ESP32 firmware is Step 6. Printer UART
+Status: architecture confirmed; Steps 1–5 (container side) implemented.
+ESP32 firmware is Step 6. Printer UART
 details for the firmware are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
@@ -58,7 +58,7 @@ traffic does not deadlock while the container is pushing a receipt.
 
 | Area | Main locations | Required change |
 | --- | --- | --- |
-| Container packaging | `app/config.py`, `app/device_password.py`, `web/` | Add a multi-stage image, mounted data directory, non-root runtime, Compose example and health check. |
+| Container packaging | `Dockerfile`, `docker-compose.yaml`, `portainer-compose.yaml`, `app/paths.py` | Multi-stage image, mounted data directory, non-root runtime and health check (Step 4 complete). |
 | ESP32 firmware | [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implement the reference protocol and hardware UART on the chosen ESP32-S3 board. |
 
 ## Step 1 — Remove WiFi provisioning end to end
@@ -147,7 +147,7 @@ retries have defined behavior; full receipt snapshots preserve layout; console a
 USB outputs work in development; the simulator passes the protocol tests that the
 firmware will have to pass in Step 6.
 
-## Step 4 — Container packaging and persistence
+## Step 4 — Container packaging and persistence (implemented)
 
 - Add a multi-stage Dockerfile: build the UI with locked npm dependencies, then
   serve its static build and API from the Python runtime.
@@ -324,4 +324,16 @@ builder tests, one first-boot variant, and the launcher test removed; guard test
 frontend lint/build and icon validator. Container
 packaging and container smoke CI remain Step 4.
 
-Next implementation: Step 4 (container packaging and persistence).
+Step 4 result: a multi-stage Dockerfile builds the UI with locked npm
+dependencies, installs Python requirements, and starts one foreground Uvicorn
+worker as UID/GID 1000:1000. `PC1_DATA_DIR=/data` consolidates settings,
+generated password and Adventure saves while bundled content stays read-only.
+Both Compose examples use `/path/to/data:/data`; Portainer references a
+prebuilt image. Port mapping, environment variables, health check and bind
+mount are documented in the README. CI builds and smoke-tests the container.
+Verification: 355 backend tests, multi-stage Docker image build, UI/API/console
+Sudoku print as a non-root user with a read-only root filesystem, configurable
+listener port and healthy Docker image check; settings and generated login
+password both survived container recreation with the same `/data` bind mount.
+
+Next implementation: Step 6 (ESP32-S3 firmware).

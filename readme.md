@@ -5,8 +5,9 @@
 > This fork is migrating to a container + ESP32-S3 architecture. The server
 > handles application logic and pushes print commands over HTTP. The ESP32-S3
 > firmware will provision WiFi, relay physical inputs, and drive a CSN-A2 printer
-> over TTL UART. The server-side relay works with the simulator; firmware and
-> container packaging are still planned. See the [migration plan](docs/container-esp32-plan.md).
+> over TTL UART. The server-side relay works with the simulator and the server
+> has a container image; firmware is still planned for Step 6. See the
+> [migration plan](docs/container-esp32-plan.md).
 
 ---
 
@@ -212,12 +213,63 @@ cd web && npm install
     PC1_PRINTER_OUTPUT=console ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
    ```
 
-### Container packaging
+### Container deployment (Step 4)
 
-An official Dockerfile and Compose configuration are planned in Step 4. Until
-then, run the server directly as shown above. To test the production HTTP print
-path without firmware, start `PC1_PRINTER_OUTPUT=esp32 just backend` and
-`just relay-sim` in separate terminals with the same `PC1_RELAY_TOKEN`.
+The multi-stage `Dockerfile` builds the React UI and runs FastAPI on Python 3.12
+as UID/GID **1000:1000** (one worker, no reload). It serves the built UI and API
+on the same configurable port. The application state lives in `PC1_DATA_DIR=/data`:
+`config.json`, `config.json.bak`, the generated `.device_password`, and
+`adventure_saves/`. Bundled stories and offline databases remain inside the
+image. Container updates replace the image without changing the bind mount.
+
+The Compose files use an **absolute host bind mount**:
+
+```yaml
+volumes:
+  - /path/to/data:/data
+```
+
+Replace `/path/to/data` in `docker-compose.yaml` or `portainer-compose.yaml`
+with a real absolute directory on your Docker host. Create it and make it
+writable by UID/GID 1000:1000 (for example, `mkdir -p /srv/paper-console &&
+sudo chown 1000:1000 /srv/paper-console`). If migrating local settings, copy
+`config.json` and any `app/data/adventure_saves/` files there **before** starting
+the container. Do not put credentials in the image.
+
+**Docker Compose:**
+
+```bash
+cp .env.example .env
+# Edit .env: set PC1_RELAY_TOKEN for ESP32 output (or PC1_PRINTER_OUTPUT=console).
+# Edit docker-compose.yaml: replace /path/to/data with your host directory.
+docker compose -f docker-compose.yaml up -d --build
+docker compose -f docker-compose.yaml logs -f paper-console
+```
+
+The UI and API are at `http://<docker-host>:${PC1_HOST_PORT:-8000}`. The
+Dockerfile's health check probes `/api/health`; use
+`docker compose -f docker-compose.yaml ps` to inspect it. On first boot, if
+`PC1_DEVICE_PASSWORD` is empty, the generated password appears once in the
+container log and persists at `/data/.device_password`. Alternatively, set
+`PC1_DEVICE_PASSWORD` in `.env`. The server clock comes from the container;
+the app timezone in General Settings controls receipt formatting and schedules.
+
+**Portainer:** Build `paper-console:local` on the same Docker host with
+`docker build -t paper-console:local .`, or publish an image and set `PC1_IMAGE`
+in the stack environment. Paste `portainer-compose.yaml` into a stack, replace
+`/path/to/data` with the host directory, and set `PC1_RELAY_TOKEN`, the port
+variables, and optionally `PC1_DEVICE_PASSWORD` in Portainer's stack environment.
+The Portainer file references an image and does not depend on Portainer building
+source code.
+
+`PC1_PORT` changes the listener inside the container; `PC1_HOST_PORT` changes
+the mapped host port. The container needs outbound LAN access to the ESP32,
+and the ESP32 must be able to reach the host's mapped port to send heartbeats
+and input events. Set `PC1_RELAY_URL` if its advertised callback address is not
+reachable from the container. For a dry run without firmware, set
+`PC1_PRINTER_OUTPUT=console`, then use the UI print button or send an authenticated
+`POST /action/print-channel/5`. Native USB printing is for local development;
+the production container does not pass through USB devices.
 
 ---
 

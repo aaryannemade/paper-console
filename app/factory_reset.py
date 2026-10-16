@@ -1,8 +1,6 @@
 """Application-data reset; never changes host networking, credentials or power."""
 
 import logging
-from pathlib import Path
-
 import app.config as config_module
 
 logger = logging.getLogger(__name__)
@@ -23,7 +21,7 @@ def perform_factory_reset() -> dict:
         return {"config_cleared": False, "errors": [str(exc)]}
 
     config_module.settings = defaults
-    base_dir = Path(config_module.__file__).resolve().parents[1]
+    base_dir = config_module.get_config_dir()
     for name in ("config.json.bak",):
         try:
             (base_dir / name).unlink(missing_ok=True)

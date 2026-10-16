@@ -34,3 +34,43 @@ jobs:
         run: npm run lint --prefix web
       - name: Build frontend
         run: npm run build --prefix web
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build application image
+        run: docker build -t paper-console:ci .
+      - name: Smoke test HTTP API, UI and console printing with a bind mount
+        shell: bash
+        run: |
+          data_dir="$(mktemp -d)"
+          sudo chown 1000:1000 "$data_dir"
+          cleanup() {
+            docker rm -f paper-console-ci >/dev/null 2>&1 || true
+            sudo rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+          docker run -d --name paper-console-ci \
+            --read-only --tmpfs /tmp:rw,mode=1777 \
+            -v "$data_dir:/data" -p 127.0.0.1:18080:8000 \
+            -e PC1_DEVICE_PASSWORD=container-ci-password \
+            -e PC1_PRINTER_OUTPUT=console paper-console:ci
+          for attempt in {1..40}; do
+            if curl -fsS http://127.0.0.1:18080/api/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/api/health
+          curl -fsS http://127.0.0.1:18080/ | grep -q 'id="root"'
+          curl -fsS -X POST -H 'X-PC1-Device-Password: container-ci-password' \
+            http://127.0.0.1:18080/action/print-channel/5
+          for attempt in {1..20}; do
+            if docker logs paper-console-ci 2>&1 | grep -q '\[PRINT\] \[RECEIPT\]'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs paper-console-ci
+          exit 1

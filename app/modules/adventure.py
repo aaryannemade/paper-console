@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from app.module_registry import register_module
+from app.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +34,10 @@ class AdventureState:
 
 def _get_state_path(module_id: str) -> Path:
     """Get the path to save game state for a specific module instance."""
-    # __file__ is app/modules/adventure.py
-    # Go up one dir to app/, then into data/adventure_saves/
-    module_dir = Path(__file__).parent  # app/modules/
-    state_dir = module_dir.parent / "data" / "adventure_saves"  # app/data/adventure_saves/
+    # Bundled story assets stay in app/data; writable saves go under /data.
+    module_dir = Path(__file__).parent
+    default = module_dir.parent / "data"
+    state_dir = data_dir(default) / "adventure_saves"
     state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir / f"{module_id}.json"
 

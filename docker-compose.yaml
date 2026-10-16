@@ -1,0 +1,19 @@
+services:
+  paper-console:
+    build: .
+    image: paper-console:local
+    restart: unless-stopped
+    ports:
+      - "${PC1_HOST_PORT:-8000}:${PC1_PORT:-8000}"
+    environment:
+      PC1_PORT: ${PC1_PORT:-8000}
+      PC1_DATA_DIR: /data
+      PC1_PRINTER_OUTPUT: ${PC1_PRINTER_OUTPUT:-esp32}
+      PC1_DEVICE_PASSWORD: ${PC1_DEVICE_PASSWORD:-}
+      PC1_RELAY_TOKEN: ${PC1_RELAY_TOKEN:-}
+      PC1_RELAY_URL: ${PC1_RELAY_URL:-}
+      PC1_SESSION_SECRET: ${PC1_SESSION_SECRET:-}
+      PC1_CORS_ORIGINS: ${PC1_CORS_ORIGINS:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - /path/to/data:/data

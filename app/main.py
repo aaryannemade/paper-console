@@ -107,6 +107,7 @@ from app.modules import email_client, webhook, text, calendar, weather
 import app.print_webhook_service as print_webhook_service
 
 import app.device_password as device_password
+from app.paths import prepare_data_dir
 import app.device_input as device_input
 import app.relay_auth as relay_auth
 import app.relay_link as relay_link
@@ -1033,6 +1034,9 @@ async def lifespan(app: FastAPI):
     # Capture the running loop
     global_loop = asyncio.get_running_loop()
 
+    # Fail fast if the persistent bind mount is missing or not writable.
+    prepare_data_dir()
+
     # Fail fast on a misconfigured password, and log a generated one at startup.
     device_password.get_device_password()
     logger.info(
@@ -1129,9 +1133,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Include WiFi router
-
 
 # --- CORE API ---
 
@@ -1246,8 +1247,7 @@ async def health_check():
     # Check config file
     import app.config as config_module
 
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(config_module.__file__)))
-    config_path = os.path.join(base_dir, "config.json")
+    config_path = config_module.get_config_dir() / "config.json"
     health["components"]["config"] = (
         "exists" if os.path.exists(config_path) else "missing"
     )

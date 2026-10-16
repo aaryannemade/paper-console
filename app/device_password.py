@@ -20,6 +20,8 @@ import os
 import secrets
 from pathlib import Path
 
+from app.paths import data_dir
+
 logger = logging.getLogger(__name__)
 
 DEVICE_PASSWORD_ENV = "PC1_DEVICE_PASSWORD"
@@ -40,7 +42,7 @@ def _read_password_file(path: Path) -> str:
 
 def get_generated_password_path() -> Path:
     configured = os.environ.get(GENERATED_PASSWORD_FILE_ENV, "").strip()
-    return Path(configured) if configured else _PROJECT_ROOT / ".device_password"
+    return Path(configured) if configured else data_dir(_PROJECT_ROOT) / ".device_password"
 
 
 def _configured_password() -> tuple[str, str]:
