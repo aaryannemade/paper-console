@@ -4,7 +4,8 @@ The raster printer renders every receipt to one bitmap and hands it to an output
 
 * ``console`` — development: log a summary (the renderer also echoes ``[PRINT]``
   text lines) and optionally save each receipt as PNG.
-* ``usb`` — development: a CSN-A2 on a USB-serial adapter (see usb_serial_output.py).
+* ``usb`` — development: native USB printer-class bulk, or an explicitly selected
+  USB-to-serial adapter (see usb_bulk_printer.py and usb_serial_output.py).
 * ``esp32`` — production: relay to the ESP32-S3 over HTTP (esp32_relay_output.py).
 
 Select with ``PC1_PRINTER_OUTPUT``; the default is ``esp32``.
@@ -141,7 +142,18 @@ def create_output(mode: Optional[str] = None) -> PrintOutput:
     if mode == "console":
         return ConsoleOutput(capture_dir=os.environ.get(CAPTURE_DIR_ENV, "").strip() or None)
     if mode == "usb":
-        from app.drivers.usb_serial_output import UsbSerialOutput
+        from app.drivers.usb_serial_output import UsbPrinterOutput, UsbSerialOutput
+
+        # An explicit serial port selects the USB-to-serial development path.
+        # Otherwise prefer the printer's native USB class interface; never
+        # silently print to an unrelated serial adapter on an access failure.
+        if os.environ.get("PC1_PRINTER_PORT", "").strip():
+            return UsbSerialOutput.from_env()
+
+        from app.drivers.usb_bulk_printer import VENDOR_ENV, find_native_printer
+
+        if os.environ.get(VENDOR_ENV, "").strip() or find_native_printer() is not None:
+            return UsbPrinterOutput()
 
         return UsbSerialOutput.from_env()
     from app.drivers.esp32_relay_output import Esp32RelayOutput

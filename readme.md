@@ -128,12 +128,47 @@ handed to the output selected by `PC1_PRINTER_OUTPUT`:
 | --- | --- | --- |
 | `esp32` | Production (default) | Pushes jobs to the ESP32-S3 relay over HTTP ([protocol](docs/relay-protocol.md)). Needs `PC1_RELAY_TOKEN` and heartbeats from the device; `PC1_RELAY_URL` optionally pins the device URL. Develop against `just relay-sim`. |
 | `console` | Development (`just backend` default) | Logs `[PRINT]` text lines plus a `[RECEIPT]` line with size and byte count. Set `PC1_PRINT_CAPTURE_DIR` to also save each receipt as PNG. |
-| `usb` | Development only | Prints on a CSN-A2 connected through a USB-serial (TTL) adapter. `PC1_PRINTER_PORT` overrides auto-detection (`/dev/serial/by-id/*`, `/dev/ttyUSB*`, `/dev/ttyACM*`); `PC1_PRINTER_BAUDRATE` defaults to 9600. Your user needs serial port access (usually the `dialout` group). |
+| `usb` | Development only | Prints directly to a native USB printer-class device (such as the Gprinter GP-58) through libusb. If none is connected, tries a USB-to-serial (TTL) adapter. Set `PC1_PRINTER_PORT` to select a serial adapter explicitly (`/dev/serial/by-id/*`, `/dev/ttyUSB*`, `/dev/ttyACM*`; baud rate defaults to 9600). For multiple native printers, select one with `PC1_PRINTER_USB_VENDOR_ID` and `PC1_PRINTER_USB_PRODUCT_ID` (hex). USB printer-class devices do not use the UART baud setting. |
 
 ```bash
 PC1_PRINT_CAPTURE_DIR=testing/artifacts/live just backend   # console + PNGs
 PC1_PRINTER_OUTPUT=usb just backend                         # real printer over USB
 ```
+
+To test a printer with a **built-in USB connector** (no serial adapter):
+
+1. Confirm the device is a USB printer: `nix shell nixpkgs#usbutils --command lsusb`.
+   A GP-58 shows `0fe6:811e` and a Printer interface. Linux may not create
+   `/dev/usb/lp0`; the native USB output talks to its bulk endpoint directly.
+2. Allow your user to open that USB device for this session. Find its bus and
+   device numbers in `lsusb`, then grant access to that specific node. For
+   example, bus 001 device 020 and user `aaryan`:
+   `sudo setfacl -m u:aaryan:rw /dev/bus/usb/001/020`.
+   Confirm with `getfacl -p /dev/bus/usb/001/020`. A replug may change the
+   device number and remove this temporary permission. Only one process can
+   claim the native USB interface at a time; stop another backend before
+   probing or printing from a separate process.
+3. In a first terminal inside `nix develop`:
+   `export PC1_DEVICE_PASSWORD='choose-your-local-server-password'` then
+   `PC1_PRINTER_OUTPUT=usb just backend`. Confirm
+   `http://localhost:8000/api/printer/status` reports `"ready":true`.
+4. In a second terminal inside `nix develop`: `just frontend-install` (first
+   run only), then `just frontend`. Open `http://localhost:5173` and log in
+   with the server password.
+5. Use the **print** button on the Sudoku module (or channel 5), or request it
+   directly with:
+
+   ```bash
+   curl -X POST -H "X-PC1-Device-Password: choose-your-local-server-password" \
+     http://localhost:8000/debug/print-module/default-sudoku-001
+   ```
+
+The backend sends the same 384-dot receipt bitmap and ESC/POS raster bytes as
+the relay. On this native USB interface, the GP-58's UART baud settings from
+the self-test do not apply. If the status says unavailable, check the backend
+warning and USB-device permissions before sending another job.
+After the bitmap, one `ESC J` feed advances five lines (120 dots) for tear
+clearance; the former two-command seven-line feed wasted paper.
 
 When the output is unavailable (ESP32 offline, USB adapter unplugged), prints are
 skipped and logged: UI/API requests get `503`, and scheduled, email and Slack
@@ -141,7 +176,7 @@ prints are dropped. Nothing is queued. `/api/health` reports the printer state
 but does not mark the server degraded for it. An unknown `PC1_PRINTER_OUTPUT`
 value stops startup.
 
-The flake provides `just`, Python 3.12, the application/test dependencies, Node.js 22
+The flake provides `just`, Python 3.12, libusb and the application/test dependencies, Node.js 22
 (including npm), and launcher utilities on Linux and macOS, for x86-64 and ARM64.
 `flake.lock` pins the Nix package set; frontend dependencies use
 `web/package-lock.json`. The first shell entry downloads the Nix dependencies;
@@ -379,8 +414,8 @@ paper-console/
 ## 5. Printer and Device
 
 The server never accesses GPIO or provisions a host serial port. For development,
-use `console`, or attach a CSN-A2 through a USB-to-TTL serial adapter and select
-`PC1_PRINTER_OUTPUT=usb`. For the ESP32 relay protocol, serial framing and
+use `console`, connect a printer over native USB, or use a USB-to-TTL serial
+adapter with `PC1_PRINTER_OUTPUT=usb`. For the ESP32 relay protocol, serial framing and
 electrical considerations, see [printer UART reference](docs/printer-uart-reference.md)
 and [relay protocol](docs/relay-protocol.md). ESP32 wiring and firmware belong to
 Step 6; pin assignments will be confirmed for the chosen board.
@@ -392,8 +427,10 @@ Step 6; pin assignments will be confirmed for the chosen board.
 ### Printer Issues
 * **Relay offline:** Check `GET /api/printer/link` or Printer Connection in General
   Settings. Start `just relay-sim` to exercise the HTTP relay without firmware.
-* **USB printer not found:** Check `PC1_PRINTER_PORT`, adapter power and serial
-  access permissions; most Linux distributions use the `dialout` group.
+* **USB printer not found:** For native USB, check `lsusb`, device permissions
+  (`/dev/bus/usb/BUS/DEVICE`) and any permission error in the backend log. For
+  a USB-to-serial adapter, check `PC1_PRINTER_PORT` and serial access permissions
+  (usually the `dialout` group).
 * **No output in development:** Start with `PC1_PRINTER_OUTPUT=console just backend`
   and watch the `[PRINT]` and `[RECEIPT]` log entries.
 

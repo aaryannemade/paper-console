@@ -1,17 +1,18 @@
 # CSN-A2 / QR204 printer UART reference (for ESP32-S3 firmware)
 
 This captures how the upstream Raspberry Pi build drove the thermal printer, so
-the ESP32-S3 relay can reproduce it in Step 3 of the
+the ESP32-S3 relay can reproduce it in Step 6 of the
 [migration plan](container-esp32-plan.md). The Pi-specific code was removed in
 Step 2 (`app/printer_uart.py`, `scripts/wifi_ap_nmcli.sh`,
 `testing/printer_uart_burnin.py`). Use `git show 57a39b3:<path>` to read the
 originals.
 
-The byte-level transport described below still lives in
-`app/drivers/printer_serial.py` (`_send_bitmap`, `_encode_raster_strip`,
-`_initialize_printer`, `feed_direct`) and is covered by
-`testing/test_printer_transport.py`. Keep this document in sync with that code
-until the transport moves to the ESP32.
+The byte encoding lives in `app/drivers/escpos.py`, with delivery through
+`app/drivers/usb_serial_output.py` (native USB printer or USB-to-serial adapter)
+and `app/drivers/esp32_relay_output.py` (HTTP relay). Raster rendering lives in
+`app/drivers/printer_raster.py`. The native USB printer-class connection carries
+these same ESC/POS bytes over a USB bulk endpoint; the 9600 baud setting applies
+only to the TTL UART or a USB-to-serial adapter, not native USB.
 
 ## Electrical and serial settings
 
@@ -108,9 +109,11 @@ waits 300 ms, then re-applies the three ASCII settings above.
 
 ### After the receipt
 
-- Post-print feed for cutter clearance (`feed_direct`): wait 50 ms, then send
-  `1B 64 n` (ESC d, n lines). As a backup, also send `1B 4A k` (ESC J, k dots)
-  in chunks of up to 255, where k = n × 24.
+- Post-print tear clearance: send `1B 4A k` (ESC J, k dots) once, split into
+  commands of up to 255 dots. The default is 5 lines (120 dots); the rendered
+  bitmap also includes a short 32-dot white margin. The former driver sent
+  both `ESC d` and `ESC J` for 7 lines each, causing a long blank section on
+  printers that honor both commands.
 - Tactile "blip" when a print starts: `1B 4A 02` (ESC J 2, feed 2 dots).
 - Optional status query: `10 04 01` (DLE EOT 1). Bit 3 of the 1-byte reply is
   1 when the printer is offline or busy. No reply means "assume ready".

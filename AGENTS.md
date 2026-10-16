@@ -13,7 +13,7 @@ Rules:
 
 ## Print Outputs
 
-`PC1_PRINTER_OUTPUT` selects where receipts go: `esp32` (production default), `console` (default for `just backend` and tests) or `usb` (development only). All outputs share `app/drivers/printer_raster.py`, so a console/PNG capture is the exact bitmap a printer receives. To capture receipts from a live server, set `PC1_PRINT_CAPTURE_DIR`. Keep CSN-A2 byte encoding in `app/drivers/escpos.py`, not in an output. To exercise the production `esp32` output locally, run `PC1_PRINTER_OUTPUT=esp32 just backend` with `just relay-sim` (`testing/relay_simulator.py`, the reference device implementation of `docs/relay-protocol.md`); keep the simulator in step with protocol changes.
+`PC1_PRINTER_OUTPUT` selects where receipts go: `esp32` (production default), `console` (default for `just backend` and tests) or `usb` (development only). `usb` prefers the printer's native USB printer-class bulk endpoint (`app/drivers/usb_bulk_printer.py`, PyUSB/libusb); `PC1_PRINTER_PORT` explicitly selects a USB-to-serial adapter. All outputs share `app/drivers/printer_raster.py`, so a console/PNG capture is the exact bitmap a printer receives. To capture receipts from a live server, set `PC1_PRINT_CAPTURE_DIR`. Keep CSN-A2 byte encoding in `app/drivers/escpos.py`, not in an output. To exercise the production `esp32` output locally, run `PC1_PRINTER_OUTPUT=esp32 just backend` with `just relay-sim` (`testing/relay_simulator.py`, the reference device implementation of `docs/relay-protocol.md`); keep the simulator in step with protocol changes.
 
 ## Console Raster Preview for Print Debugging
 

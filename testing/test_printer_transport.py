@@ -8,7 +8,8 @@ from PIL import Image
 from app.drivers import escpos
 from app.drivers.print_outputs import PrinterTransportError, PrinterUnavailableError
 from app.drivers.printer_raster import RasterPrinter
-from app.drivers.usb_serial_output import UsbSerialOutput
+from app.drivers.usb_serial_output import UsbPrinterOutput, UsbSerialOutput
+from app.drivers.usb_bulk_printer import UsbBulkPort, find_native_printer, printer_interface
 
 
 class _FakeSerial:
@@ -119,6 +120,14 @@ def test_receipt_uses_guarded_24_row_strips_then_cutter_feed():
     assert stats["cancelled"] is False
 
 
+def test_post_print_feed_is_single_command_with_tear_clearance():
+    from app.config import DEFAULT_CUTTER_FEED_LINES
+
+    assert DEFAULT_CUTTER_FEED_LINES == 5
+    assert escpos.feed_lines(DEFAULT_CUTTER_FEED_LINES) == b"\x1b\x4a\x78"
+    assert escpos.feed_lines(0) == b""
+
+
 def test_writes_are_chunked_to_128_bytes():
     fake = _FakeSerial()
     sizes = []
@@ -211,3 +220,125 @@ def test_raster_printer_flush_delivers_cutter_feed_through_output():
 
     assert bytes(fake.written).endswith(escpos.feed_lines(4))
     assert driver.last_transport_stats["strips"] >= 1
+
+
+class _UsbEndpoint:
+    bEndpointAddress = 0x03
+    bmAttributes = 0x02
+
+
+class _UsbInterface:
+    bInterfaceClass = 7
+    bInterfaceNumber = 0
+
+    def __iter__(self):
+        return iter([_UsbEndpoint()])
+
+
+class _UsbConfiguration:
+    bConfigurationValue = 1
+
+    def __iter__(self):
+        return iter([_UsbInterface()])
+
+
+class _UsbDevice:
+    idVendor = 0x0FE6
+    idProduct = 0x811E
+
+    def __init__(self):
+        self.writes = []
+        self.closed = False
+
+    def __iter__(self):
+        return iter([_UsbConfiguration()])
+
+    def get_active_configuration(self):
+        return _UsbConfiguration()
+
+    def is_kernel_driver_active(self, interface):
+        assert interface == 0
+        return False
+
+    def write(self, endpoint, data, timeout):
+        assert endpoint == 0x03 and timeout == 5000
+        self.writes.append(bytes(data))
+        return len(data)
+
+
+def test_native_usb_printer_discovery_and_bulk_writes(monkeypatch):
+    import usb.core
+    import usb.util
+
+    device = _UsbDevice()
+    monkeypatch.delenv("PC1_PRINTER_USB_VENDOR_ID", raising=False)
+    monkeypatch.delenv("PC1_PRINTER_USB_PRODUCT_ID", raising=False)
+    monkeypatch.setattr("app.drivers.usb_bulk_printer._backend", lambda: object())
+    monkeypatch.setattr(usb.core, "find", lambda **kwargs: [device])
+    monkeypatch.setattr(usb.util, "claim_interface", lambda dev, interface: None)
+    monkeypatch.setattr(usb.util, "dispose_resources", lambda dev: setattr(dev, "closed", True))
+
+    assert printer_interface(device)[-1].bEndpointAddress == 0x03
+    assert find_native_printer() is device
+    port = UsbBulkPort(device)
+    assert port.port == "usb:0fe6:811e"
+    assert port.write(b"\x1d\x76\x30") == 3
+    assert device.writes == [b"\x1d\x76\x30"]
+    port.close()
+    assert device.closed and not port.is_open
+
+
+def test_native_usb_output_uses_serial_raster_framing(monkeypatch):
+    fake = _FakeSerial()
+    fake.port = "usb:0fe6:811e"
+    output = UsbPrinterOutput(open_now=False, serial_factory=lambda port, baud: fake)
+    output.wait_for_idle = lambda: None
+
+    stats = output.print_receipt(
+        Image.new("1", (384, 24), 0), feed_lines_after=2, cancel_event=threading.Event()
+    )
+
+    data = bytes(fake.written)
+    assert data.startswith(escpos.NUL * 5 + escpos.ESC_INIT + escpos.ASCII_SETTINGS)
+    assert escpos.encode_raster_strip(Image.new("1", (384, 24), 0)) in data
+    assert data.endswith(escpos.feed_lines(2))
+    assert stats["strips"] == 1
+    assert output.describe()["port"] == "usb:0fe6:811e"
+    assert "baudrate" not in output.describe()
+
+
+def test_native_usb_access_error_does_not_fall_back_to_serial(monkeypatch):
+    from app.drivers.print_outputs import create_output
+
+    monkeypatch.delenv("PC1_PRINTER_PORT", raising=False)
+    monkeypatch.setattr("app.drivers.usb_bulk_printer.find_native_printer", lambda: _UsbDevice())
+    monkeypatch.setattr(
+        "app.drivers.usb_bulk_printer.UsbBulkPort",
+        lambda device: (_ for _ in ()).throw(PermissionError("access denied")),
+    )
+    output = create_output("usb")
+    assert isinstance(output, UsbPrinterOutput)
+    assert not output.is_available()
+    assert "access denied" in output.describe()["detail"]
+
+
+def test_native_usb_requires_explicit_ids_when_multiple_printers(monkeypatch):
+    import usb.core
+
+    monkeypatch.delenv("PC1_PRINTER_USB_VENDOR_ID", raising=False)
+    monkeypatch.delenv("PC1_PRINTER_USB_PRODUCT_ID", raising=False)
+    monkeypatch.setattr("app.drivers.usb_bulk_printer._backend", lambda: object())
+    devices = [_UsbDevice(), _UsbDevice()]
+
+    def discover(**filters):
+        if filters.get("idVendor") == 0x0FE6 and filters.get("idProduct") == 0x811E:
+            return devices[:1]
+        return devices
+
+    monkeypatch.setattr(usb.core, "find", discover)
+    with pytest.raises(PrinterUnavailableError, match="Multiple USB printers"):
+        find_native_printer()
+
+    monkeypatch.setenv("PC1_PRINTER_USB_VENDOR_ID", "0fe6")
+    monkeypatch.setenv("PC1_PRINTER_USB_PRODUCT_ID", "811e")
+    assert find_native_printer() is devices[0]

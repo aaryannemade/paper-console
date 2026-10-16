@@ -11,8 +11,10 @@ astral
 beautifulsoup4
 croniter
 
-# USB-serial development printer and receipt QR rendering
+# Development printers: USB-to-serial adapters and native USB printer-class devices
 pyserial
+pyusb
+# Receipt QR rendering
 qrcode[pil]
 jsonschema
 

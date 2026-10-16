@@ -96,8 +96,8 @@ class RasterPrinter:
         self.max_lines = 0  # 0 = no limit, set by reset_buffer
         self._max_lines_hit = False  # Flag set when max lines exceeded during flush
 
-        # Cutter feed space in dots (24 dots ~= 1 line).
-        # Applied as an explicit post-print feed command for reliability.
+        # Short tear-edge clearance (24 dots ~= 1 line). The bitmap already
+        # includes 32 dots of white margin; avoid doubling the paper feed.
         self.cutter_feed_dots = app.config.DEFAULT_CUTTER_FEED_LINES * 24
 
         # Font settings (fixed values)

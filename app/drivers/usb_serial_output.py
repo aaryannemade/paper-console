@@ -1,6 +1,8 @@
-"""Development output: a CSN-A2 on a USB-serial adapter.
+"""Development output: a CSN-A2 on a USB-to-serial adapter.
 
-Not used in production (the ESP32 drives the printer there). Wire the adapter's
+The native USB printer-class interface uses UsbPrinterOutput below, sharing this
+output's raster-strip writing. Not used in production (the ESP32 drives the
+printer there). Wire a serial adapter's
 TX to the printer's RX (and optionally RX to TX for status replies), at TTL level.
 The printer's DTR busy line is not available over USB; pacing relies on the
 128-byte writes and per-strip flushes described in docs/printer-uart-reference.md.
@@ -107,12 +109,15 @@ class UsbSerialOutput(PrintOutput):
             self.ser = self._serial_factory(port, self.baudrate)
             self._initialize_printer()
         except Exception as exc:
-            self.ser = None
+            self._drop_connection()
             self.last_error = f"{port}: {exc}"
             logger.warning("USB printer unavailable: %s", self.last_error)
             return False
         self.last_error = None
-        logger.info("USB printer connected on %s at %d baud", port, self.baudrate)
+        if self.baudrate:
+            logger.info("USB-to-serial printer connected on %s at %d baud", port, self.baudrate)
+        else:
+            logger.info("Native USB printer connected on %s", getattr(self.ser, "port", port))
         return True
 
     def _drop_connection(self):
@@ -212,6 +217,10 @@ class UsbSerialOutput(PrintOutput):
                 # Force a reopen next time; the adapter may have been unplugged.
                 self._drop_connection()
                 raise
+            logger.info(
+                "USB receipt queued: %dx%d strips=%d bytes=%d",
+                stats["width"], stats["height"], stats["strips"], stats["bytes_sent"],
+            )
             self.last_transport_stats = dict(stats)
             return stats
 
@@ -251,15 +260,6 @@ class UsbSerialOutput(PrintOutput):
             stats["cancelled"] = True
             stats["cancelled_after_strip"] = stats["strips"]
         stats["elapsed_seconds"] = time.monotonic() - started
-        logger.info(
-            "USB receipt %s: %dx%d strips=%d bytes=%d elapsed=%.2fs",
-            "cancelled" if stats["cancelled"] else "sent",
-            width,
-            height,
-            stats["strips"],
-            stats["bytes_sent"],
-            stats["elapsed_seconds"],
-        )
         return stats
 
     def is_printer_busy(self) -> bool:
@@ -311,3 +311,37 @@ class UsbSerialOutput(PrintOutput):
             except PrinterTransportError:
                 logger.debug("USB printer reset failed", exc_info=True)
                 self._drop_connection()
+
+
+def _open_native_usb(_port: str, _baudrate: int):
+    from app.drivers.usb_bulk_printer import UsbBulkPort, find_native_printer
+
+    device = find_native_printer()
+    if device is None:
+        raise PrinterUnavailableError("No USB printer-class device found")
+    return UsbBulkPort(device)
+
+
+class UsbPrinterOutput(UsbSerialOutput):
+    """Native USB printer-class output (bulk transfers, no UART baud rate)."""
+
+    def __init__(self, *, open_now=True, serial_factory=_open_native_usb):
+        super().__init__(
+            port="native USB", baudrate=0, serial_factory=serial_factory, open_now=open_now
+        )
+
+    def _try_open(self, *, force: bool = False) -> bool:
+        available = super()._try_open(force=force)
+        if available:
+            self.port = self.ser.port
+        return available
+
+    def describe(self) -> dict:
+        info = super().describe()
+        info.pop("baudrate", None)
+        return info
+
+    def is_printer_busy(self) -> bool:
+        # Native USB printers need not support UART DLE EOT status replies;
+        # don't inject status queries into the bulk stream after printing.
+        return False

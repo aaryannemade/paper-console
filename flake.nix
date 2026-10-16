@@ -1,5 +1,5 @@
 {
-  description = "Paper Console development environment (mock hardware)";
+  description = "Paper Console development environment (console, USB and ESP32 relay)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
 
@@ -26,6 +26,7 @@
             beautifulsoup4
             croniter
             pyserial
+            pyusb
             qrcode
             pillow # qrcode[pil] and receipt raster rendering
             jsonschema
@@ -52,10 +53,12 @@
               pkgs.just
               pkgs.bash
               pkgs.lsof
+              pkgs.libusb1 # Native USB printer-class transport (development)
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.procps ];
 
             # Avoid importing unrelated user-installed Python packages.
             PYTHONNOUSERSITE = "1";
+            PC1_LIBUSB_LIBRARY = "${pkgs.libusb1}/lib/libusb-1.0${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
 
             shellHook = ''
               echo "Paper Console: Python 3.12 + Node.js 22 (Nix-managed dependencies)"

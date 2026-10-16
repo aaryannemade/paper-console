@@ -84,17 +84,12 @@ def feed_dots(dots: int) -> bytes:
 
 
 def feed_lines(lines: int) -> bytes:
-    """Post-print feed: ESC d n followed by the ESC J equivalent.
+    """Post-print tear clearance, encoded once as ESC J dots.
 
-    Both are sent because printer firmwares differ in which one they honor after
-    raster data; the original driver did the same.
+    The former ESC d + ESC J pair advanced the paper twice on printers that
+    support both commands. ESC J is also used for the working tactile blip.
     """
-    lines = max(0, int(lines))
-    if lines == 0:
-        return b""
-    return b"\x1b\x64" + bytes([min(lines, MAX_FEED_UNITS)]) + feed_dots(
-        lines * DOTS_PER_LINE
-    )
+    return feed_dots(max(0, int(lines)) * DOTS_PER_LINE)
 
 
 def is_offline_status(status_byte: int) -> bool:
