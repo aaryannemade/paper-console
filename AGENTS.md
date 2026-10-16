@@ -17,7 +17,7 @@ Rules:
 
 ## Container Runtime
 
-The multi-stage `Dockerfile` serves the built UI and API as UID/GID 1000:1000 with `PC1_DATA_DIR=/data`. `docker-compose.yaml` and `portainer-compose.yaml` both use an absolute host bind mount (`/path/to/data:/data`); replace the example host path before deployment. Settings, generated login password and Adventure saves belong under `/data`; bundled datasets, icons and fonts remain read-only in the image. The container runs one Uvicorn worker because scheduling and printer reservations are process-local. Container printing defaults to `esp32`; use `console` for smoke tests without firmware.
+The multi-stage `Dockerfile` serves the built UI and API as UID/GID 1000:1000 with `PC1_DATA_DIR=/data`. `docker-compose.yaml` and `portainer-compose.yaml` both use an absolute host bind mount (`/path/to/data:/data`); replace the example host path before deployment. Both run as `user: "${PUID:-1000}:${PGID:-1000}"`; PUID/PGID must match the owner of the data directory. Settings, generated login password and Adventure saves belong under `/data`; bundled datasets, icons and fonts remain read-only in the image. The container runs one Uvicorn worker because scheduling and printer reservations are process-local. Container printing defaults to `esp32`; use `console` for smoke tests without firmware.
 
 ## Console Raster Preview for Print Debugging
 

@@ -230,25 +230,23 @@ volumes:
 ```
 
 Replace `/path/to/data` in `docker-compose.yaml` or `portainer-compose.yaml`
-with a real absolute directory on your Docker host. Both Compose files set
-`userns_mode: keep-id`, which maps the container's UID 1000 to your host UID
-inside the bind mount, so any directory you own (or can create) is writable
-without `chown`. Example:
+with a real absolute directory on your Docker host. The container must be able
+to write it, so both Compose files run as `user: "${PUID}:${PGID}"` (default
+`1000:1000`). Set `PUID`/`PGID` in `.env` (or Portainer's stack environment) to
+the owner of the data directory:
 
 ```bash
 mkdir -p /srv/paper-console
+id -u; id -g      # e.g. 1000 and 100 on NixOS -> PUID=1000, PGID=100
 # Edit docker-compose.yaml: replace /path/to/data with /srv/paper-console
 docker compose -f docker-compose.yaml up -d
 ```
 
-If your host is **NixOS**, the first user is `uid 1000` and **`gid 100`**
-(`users` group), while the container's non-root user is `1000:1000`.
-`userns_mode: keep-id` remaps the container's UID 1000 to your host UID
-1000, so the container's `paper:paper` (1000:1000) becomes your host user
-(1000:100) inside the volume — exactly what the data directory needs. If
-migrating local settings, copy `config.json` and any
-`app/data/adventure_saves/` files there **before** starting the container. Do
-not put credentials in the image.
+Under **rootless Podman** your host user is container root, and container UID
+1000 maps to a subordinate UID that cannot write your directory; use
+`PUID=0` and `PGID=0` there (still unprivileged on the host). If migrating local
+settings, copy `config.json` and any `app/data/adventure_saves/` files there
+**before** starting the container. Do not put credentials in the image.
 
 **Docker Compose:**
 

@@ -52,7 +52,6 @@ jobs:
           }
           trap cleanup EXIT
           docker run -d --name paper-console-ci \
-            --userns=keep-id \
             --read-only --tmpfs /tmp:rw,mode=1777 \
             -v "$data_dir:/data" -p 127.0.0.1:18080:8000 \
             -e PC1_DEVICE_PASSWORD=container-ci-password \

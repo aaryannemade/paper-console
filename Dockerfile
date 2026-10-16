@@ -1,5 +1,7 @@
 # Build the settings UI separately; no Node.js is needed in the runtime image.
-FROM node:22-alpine AS frontend
+# The output is static JS/CSS, so build it once on the native build platform
+# instead of under emulation for each target architecture.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci

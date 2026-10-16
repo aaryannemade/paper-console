@@ -4,11 +4,10 @@ services:
   paper-console:
     image: ${PC1_IMAGE:-paper-console:local}
     restart: unless-stopped
-    # NixOS puts the first user in a 1000:100 (uid:gid) pair, while the
-    # container's non-root user is 1000:1000. userns_mode=keep-id remaps the
-    # container's UID 1000 to your host UID so the bind-mounted data
-    # directory stays writable without chown.
-    userns_mode: keep-id
+    # Run as the host user/group that owns the /data bind mount
+    # (`id -u` / `id -g`, e.g. 1000:100 on NixOS). Set PUID/PGID in the
+    # stack's environment variables.
+    user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "${PC1_HOST_PORT:-8000}:${PC1_PORT:-8000}"
     environment:

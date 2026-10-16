@@ -330,9 +330,9 @@ worker as UID/GID 1000:1000. `PC1_DATA_DIR=/data` consolidates settings,
 generated password and Adventure saves while bundled content stays read-only.
 Both Compose examples use `/path/to/data:/data`; Portainer references a
 prebuilt image. Port mapping, environment variables, health check and bind
-mount are documented in the README. Both Compose files set
-`userns_mode: keep-id`, so the container's UID 1000 maps to the host UID
-inside the bind mount (NixOS users `uid 1000 gid 100` work without `chown`).
+mount are documented in the README. Both Compose files run as
+`user: "${PUID:-1000}:${PGID:-1000}"` so the UID/GID can match the owner of the
+host data directory (e.g. 1000:100 on NixOS; 0:0 under rootless Podman).
 CI builds and smoke-tests the container.
 Verification: 355 backend tests, multi-stage Docker image build, UI/API/console
 Sudoku print as a non-root user with a read-only root filesystem, configurable
