@@ -7,6 +7,7 @@ import ScheduleIcon from '../assets/ScheduleIcon';
 import ArrowUpIcon from '../assets/ArrowUpIcon';
 import ArrowDownIcon from '../assets/ArrowDownIcon';
 import WarningIcon from '../assets/WarningIcon';
+import ChannelNameInput from './ChannelNameInput';
 import { getModuleValidationIssueCount } from '../lib/moduleValidation';
 import { channelScheduleRuleCount } from '../utils';
 
@@ -17,6 +18,7 @@ const ChannelList = ({
   triggerModulePrint,
   setShowScheduleModal,
   swapChannels,
+  renameChannel,
   setShowEditModuleModal,
   setEditingModule,
   moveModuleInChannel,
@@ -397,12 +399,18 @@ const ChannelList = ({
           return (
             <div key={pos} className='rounded-xl p-[4px] shadow-lg' style={{ background: inkGradients[pos - 1] }}>
               <div className='bg-bg-card rounded-lg p-4 flex flex-col h-full'>
-              <div className='flex items-center justify-between mb-3 gap-4'>
-                <div className='flex items-center gap-3 overflow-x-auto'>
-                  <h3 className='font-bold text-black  text-lg tracking-tight'>
+              <div className='flex items-center justify-between mb-3 gap-2'>
+                <div className='flex items-center gap-2 min-w-0 flex-1'>
+                  <h3 className='font-bold text-black  text-lg tracking-tight shrink-0'>
                     {pos}
                   </h3>
-                  <div className='flex items-center gap-1'>
+                  <ChannelNameInput
+                    key={channel.name || ''}
+                    position={pos}
+                    name={channel.name}
+                    onRename={renameChannel}
+                  />
+                  <div className='flex items-center gap-1 shrink-0'>
                     <button
                       type='button'
                       onClick={() => triggerChannelPrint(pos)}
@@ -435,7 +443,7 @@ const ChannelList = ({
                     })()}
                   </div>
                 </div>
-                <div className='flex gap-1'>
+                <div className='flex gap-1 shrink-0'>
                   <button
                     type='button'
                     onClick={(e) => {

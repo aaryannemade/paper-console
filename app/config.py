@@ -141,13 +141,35 @@ class ScheduleRule(BaseModel):
     enabled: bool = True
 
 
+CHANNEL_NAME_MAX_LENGTH = 24
+
+
+def normalize_channel_name(value) -> str:
+    """Single-line, trimmed, at most CHANNEL_NAME_MAX_LENGTH characters."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("Channel name must be a string")
+    printable = "".join(ch if ch.isprintable() else " " for ch in value)
+    return " ".join(printable.split())[:CHANNEL_NAME_MAX_LENGTH].rstrip()
+
+
 class ChannelConfig(BaseModel):
     """Channel configuration - can have multiple modules assigned."""
 
     model_config = ConfigDict(extra="ignore")
 
+    # Optional user label shown in the UI, on receipts and later on a device
+    # display. Empty means unnamed; the position number is always the identity.
+    name: str = ""
+
     # New format: list of module assignments
     modules: List[ChannelModuleAssignment] = []
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _normalize_name(cls, value):
+        return normalize_channel_name(value)
 
     # Legacy schedule: list of "HH:MM" times. Converted to schedule_rules on
     # first save; still honored at runtime for configs that predate cron rules.

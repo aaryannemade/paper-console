@@ -77,6 +77,7 @@ from app.config import (
     ModuleInstance,
     ChannelModuleAssignment,
     ChannelConfig,
+    normalize_channel_name,
     ScheduleRule,
     current_datetime,
 )
@@ -618,18 +619,21 @@ def _write_channel_overview_compact():
     printer.print_header("CHANNELS", icon="list")
     for channel_num in range(1, 9):
         channel = settings.channels.get(channel_num)
+        label = f"{channel_num} {channel.name}" if channel and channel.name else str(channel_num)
+        names = []
         if channel and channel.modules:
-            names = []
             for assignment in sorted(channel.modules, key=lambda m: m.order):
                 module = settings.modules.get(assignment.module_id)
                 if module:
                     names.append(module.name)
-            if names:
-                printer.print_body(f"{channel_num}: {' + '.join(names)}")
-            else:
-                printer.print_caption(f"{channel_num}: (empty)")
+        if channel and channel.name:
+            # Named channels: the name on its own line, modules beneath it.
+            printer.print_body(label)
+            printer.print_caption(f"  {' + '.join(names)}" if names else "  (empty)")
+        elif names:
+            printer.print_body(f"{label}: {' + '.join(names)}")
         else:
-            printer.print_caption(f"{channel_num}: (empty)")
+            printer.print_caption(f"{label}: (empty)")
 
 
 def _write_long_press_menu_compact(position: int):
@@ -1446,6 +1450,29 @@ async def reorder_channel_modules(
     background_tasks.add_task(save_settings_background, settings.model_copy(deep=True))
 
     return {"message": "Modules reordered", "channel": channel}
+
+
+class ChannelNameUpdate(BaseModel):
+    name: Optional[str] = None
+
+
+@app.put("/api/channels/{position}/name", dependencies=[Depends(require_admin_access)])
+async def update_channel_name(
+    position: int, payload: ChannelNameUpdate, background_tasks: BackgroundTasks
+):
+    """Set or clear (empty name) a channel's display name."""
+    if position < 1 or position > 8:
+        raise HTTPException(status_code=400, detail="Position must be 1-8")
+    try:
+        name = normalize_channel_name(payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if position not in settings.channels:
+        settings.channels[position] = ChannelConfig(modules=[])
+    settings.channels[position].name = name
+    background_tasks.add_task(save_settings_background, settings.model_copy(deep=True))
+    return {"message": "Channel name updated", "position": position, "name": name}
 
 
 @app.post(

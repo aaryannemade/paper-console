@@ -679,6 +679,34 @@ function App() {
     reorderChannelModules(position, moduleOrders, { optimistic: true });
   };
 
+  const renameChannel = async (position, name) => {
+    const previous = settings.channels?.[position]?.name || '';
+    const setName = (value) =>
+      setSettings((prev) => ({
+        ...prev,
+        channels: {
+          ...prev.channels,
+          [position]: { ...(prev.channels?.[position] || { modules: [] }), name: value },
+        },
+      }));
+
+    setName(name);
+    try {
+      const response = await adminAuthFetch(`/api/channels/${position}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) throw new Error('Failed to rename channel');
+      const data = await response.json();
+      setName(data.name); // Server-normalized (trimmed, length-limited).
+    } catch (err) {
+      console.error('Error renaming channel:', err);
+      setName(previous);
+      setStatus({ type: 'error', message: 'Failed to rename channel' });
+    }
+  };
+
   const swapChannels = (pos1, pos2) => {
     const channel1 = settings.channels[pos1];
     const channel2 = settings.channels[pos2];
@@ -844,6 +872,7 @@ function App() {
               triggerModulePrint={triggerModulePrint}
               setShowScheduleModal={setShowScheduleModal}
               swapChannels={swapChannels}
+              renameChannel={renameChannel}
               setShowEditModuleModal={setShowEditModuleModal}
               setEditingModule={setEditingModule}
               moveModuleInChannel={moveModuleInChannel}

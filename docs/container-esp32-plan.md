@@ -259,7 +259,12 @@ as hardware acceptance. Quick Actions UX clarification is also deferred there.
   D4/GPIO5 and D5/GPIO6 remain available as candidate I²C SDA/SCL pins.
 - Show position 1–8, and preferably the server-configured channel name. Define
   a minimal server→device metadata/status contract rather than duplicating the
-  channel configuration or menu logic in firmware.
+  channel configuration or menu logic in firmware. **Done (server side):**
+  channels have an optional `name` (single line, ≤24 characters, empty =
+  unnamed) edited inline in the settings UI, stored in `config.json`, set via
+  `PUT /api/channels/{position}/name` and printed on the channel list. Still to
+  do: deliver names to the device (e.g. in the heartbeat response, with a
+  version so the device refetches only on change) and render them.
 - Keep the position display responsive during printing; define disconnected
   and reconnect states and how selection menus differ from ordinary channels.
 - Keep physical position and the displayed selection synchronized after boot,

@@ -296,6 +296,12 @@ or the server address after running `just frontend-build`.
 
 ### Channel System
 * **8 Channel Positions:** Each position (1-8) is a selectable channel reported by the ESP32 input protocol
+* **Channel Names:** Click the "Add name" field beside a channel number to label
+  it (e.g. "Work update"; single line, up to 24 characters; Enter or clicking
+  away saves, Escape cancels, empty clears). Names move with the channel when
+  swapped, appear on the Quick Actions channel list, are included in settings
+  export/import, and are set with `PUT /api/channels/{position}/name`
+  (`{"name": "..."}`). They are intended for a future ESP32 display.
 * **Modular System:** Channels are containers. You can assign **multiple modules** to a single channel (e.g., "News" followed by "Weather" followed by "Sudoku")
 * **Reordering:** 
   * **Channels:** Use Up/Down arrows next to Channel title to swap entire channels
