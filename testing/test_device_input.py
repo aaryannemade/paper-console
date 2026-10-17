@@ -16,6 +16,7 @@ from app.device_input import ChannelSelector, DeviceInputEvent, InputProcessor
 from app.drivers.esp32_relay_output import Esp32RelayOutput
 from app.drivers.printer_raster import RasterPrinter
 from app.relay_link import DeviceLink
+from testing.route_utils import find_route, route_dependencies
 
 TOKEN = "relay-token-0123456789"
 
@@ -103,9 +104,9 @@ def test_token_file_is_supported(no_token, monkeypatch, tmp_path):
 
 
 def test_device_route_is_registered_with_token_dependency():
-    route = next(r for r in main.app.routes if getattr(r, "path", "") == "/api/device/events")
+    route = find_route(main.app, "/api/device/events")
     assert route.methods == {"POST"}
-    deps = [d.call for d in route.dependant.dependencies]
+    deps = route_dependencies(main.app, "/api/device/events")
     assert relay_auth.require_relay_token in deps
     assert main.require_admin_access not in deps
 

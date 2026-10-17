@@ -18,6 +18,7 @@ from app.config import (
     normalize_channel_name,
     save_config,
 )
+from testing.route_utils import route_dependencies
 
 
 @pytest.fixture
@@ -90,8 +91,7 @@ def test_full_settings_save_keeps_names(isolated_settings):
 
 
 def test_rename_route_requires_admin():
-    routes = {getattr(r, "path", ""): r for r in main.app.routes}
-    deps = [d.call for d in routes["/api/channels/{position}/name"].dependant.dependencies]
+    deps = route_dependencies(main.app, "/api/channels/{position}/name")
     assert main.require_admin_access in deps
 
 
@@ -120,10 +120,8 @@ def test_device_channels_hash_tracks_name_changes(isolated_settings, monkeypatch
 def test_device_channel_routes_use_relay_token():
     import app.relay_auth as relay_auth
 
-    routes = {getattr(r, "path", ""): r for r in main.app.routes}
     for path in ("/api/device/channels", "/api/device/heartbeat"):
-        deps = [d.call for d in routes[path].dependant.dependencies]
-        assert relay_auth.require_relay_token in deps
+        assert relay_auth.require_relay_token in route_dependencies(main.app, path)
 
 
 def test_channel_overview_shows_names(isolated_settings, monkeypatch):

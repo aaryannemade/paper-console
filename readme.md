@@ -432,7 +432,7 @@ paper-console/
 ├── docs/                       # Relay protocol and container/ESP32 plan
 ├── icons/                      # Icon source assets
 ├── images/                     # Product photos used in the README
-├── .github/workflows/
+├── .github/workflows/          # docker-image.yml: builds and publishes the image
 ├── .env.example
 ├── AGENTS.md
 ├── config.json                 # Local settings (gitignored in normal use)

@@ -381,7 +381,8 @@ settings intact and the knob working normally.
   band-boundary cancellation latency and any unverified physical printer state).
 
 Acceptance: record actual hardware results for the above checks, keep backend
-tests/frontend checks/container smoke CI passing, and remove stale "firmware
+tests and frontend lint/build passing locally (`just test`; the `checks.yml`
+CI workflow was removed), and remove stale "firmware
 planned" statements. The core migration is complete when these results are
 recorded; future display-driven UX extensions can then be planned separately.
 

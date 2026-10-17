@@ -27,6 +27,7 @@ from app.drivers.print_outputs import PrinterTransportError, PrinterUnavailableE
 from app.drivers.printer_raster import RasterPrinter
 from app.relay_link import DeviceLink, Heartbeat, JobStatusReport
 from testing.relay_simulator import RelaySimulator
+from testing.route_utils import route_dependencies
 
 TOKEN = "relay-test-token-0123456789"
 
@@ -231,12 +232,9 @@ def test_reboot_stops_chunk_transfer_immediately(token_env, monkeypatch):
 def test_device_routes_are_registered_with_correct_auth():
     import app.relay_auth as relay_auth
 
-    routes = {getattr(r, "path", ""): r for r in main.app.routes}
     for path in ("/api/device/heartbeat", "/api/device/jobs/{job_id}/status"):
-        deps = [d.call for d in routes[path].dependant.dependencies]
-        assert relay_auth.require_relay_token in deps
-    deps = [d.call for d in routes["/api/printer/link"].dependant.dependencies]
-    assert main.require_admin_access in deps
+        assert relay_auth.require_relay_token in route_dependencies(main.app, path)
+    assert main.require_admin_access in route_dependencies(main.app, "/api/printer/link")
 
 
 # --- end to end against the simulator ---------------------------------------------
