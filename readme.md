@@ -198,11 +198,23 @@ prints are dropped. Nothing is queued. `/api/health` reports the printer state
 but does not mark the server degraded for it. An unknown `PC1_PRINTER_OUTPUT`
 value stops startup.
 
-The flake provides `just`, Python 3.12, libusb and the application/test dependencies, Node.js 22
-(including npm), and launcher utilities on Linux and macOS, for x86-64 and ARM64.
+The flake provides `just`, Python 3.14.7, pip 26.2.1, libusb and the application/test
+dependencies, Node.js 26.12.0, npm 12.2.0, and launcher utilities on Linux
+(x86-64 and ARM64) and Apple Silicon macOS. Current nixpkgs no longer supports
+Intel macOS.
+The Apple Silicon shell is declared but currently blocked by nixpkgs marking
+the Slack build dependency `jaraco-path` broken on Darwin; this update was
+built and tested on x86-64 Linux. ARM64 Linux passes flake evaluation.
 `flake.lock` pins the Nix package set; frontend dependencies use
 `web/package-lock.json`. The first shell entry downloads the Nix dependencies;
 `npm ci` separately installs the frontend dependencies.
+
+The package set follows `nixpkgs-unstable`, pinned by `flake.lock`. npm and pip
+have explicit overrides because their latest releases are newer than the copies
+in that snapshot. Refresh with `nix flake update nixpkgs`, review those overrides,
+and keep the Node/Python/npm/pip versions in `Dockerfile` aligned. Python 3.15.0
+was tried during the October 2026 update, but its Nix dependency closure failed
+in tkinter's upstream tests; 3.14.7 is the validated version for now.
 
 The recipes use Python from the Nix shell. Enter it with `nix develop`, then
 run `just test`, `just icons`, or `just backend`. If Python requirements change,
@@ -213,7 +225,8 @@ requirement; browser binaries are not included in this development shell.
 
 ### Container deployment (Step 4)
 
-The multi-stage `Dockerfile` builds the React UI and runs FastAPI on Python 3.12
+The multi-stage `Dockerfile` builds the React UI with Node.js 26.12.0/npm 12.2.0
+and runs FastAPI on Python 3.14.7 (Debian Trixie, pip 26.2.1)
 as UID/GID **1000:1000** (one worker, no reload). It serves the built UI and API
 on the same configurable port. The application state lives in `PC1_DATA_DIR=/data`:
 `config.json`, `config.json.bak`, the generated `.device_password`, and

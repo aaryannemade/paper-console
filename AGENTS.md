@@ -19,6 +19,49 @@ The real device side is the PlatformIO firmware in `firmware/` (XIAO ESP32S3): `
 
 ## Container Runtime
 
+### Updating the development and container toolchains
+
+- Check current upstream releases before choosing versions: Node's release index
+  (`https://nodejs.org/dist/index.json`), `npm view npm version`, and PyPI's pip
+  metadata (`https://pypi.org/pypi/pip/json`). Check Python release availability
+  and the corresponding official Docker image tags as well.
+- Run `nix flake update nixpkgs` to refresh the locked `nixpkgs-unstable` snapshot.
+  A fresh snapshot can still lag upstream. Inspect the actual Python, Node, npm
+  and pip versions with `nix develop --command ...`; do not assume bundled npm
+  or Nix-packaged pip is the latest.
+- `flake.nix` currently overrides npm and pip to match newer upstream releases.
+  When updating these overrides, update the version, source URL and verified
+  source hash together. Remove an override when the locked package set provides
+  the desired version. Keep pins reproducible; do not install floating `latest`
+  packages in the shell hook.
+- Keep `Dockerfile` aligned with the validated Python/Node versions and the
+  explicit npm/pip versions. Update both frontend and runtime base images; use
+  `--pull` when testing. Python requirements are installed from PyPI in Docker,
+  whereas the Nix shell uses its locked package set, so test both environments.
+- Validate with `nix develop --command just test`, then `npm ci --prefix web`,
+  `npm run lint --prefix web`, `npm run build --prefix web` and `just fw-build`
+  inside the updated shell. Review npm install-script policy changes when
+  upgrading npm majors. Run `nix flake check --no-build --all-systems` to check
+  declared platform support; report upstream platform blockers explicitly.
+- Build the container and run the backend tests against its installed runtime
+  dependencies (install `requirements-dev.txt` only in a disposable test
+  container). Run `python -m pip check`. Smoke-test the production image as its
+  non-root user with a read-only root, temporary `/tmp`, writable `/data`, and
+  `PC1_PRINTER_OUTPUT=console`: check `/api/health`, the UI, and an authenticated
+  print request, waiting for the receipt capture to be written. Use temporary
+  test data and clean up test containers afterward.
+- This host uses Podman through the `docker` command. Supply
+  `--build-arg BUILDPLATFORM=linux/amd64` for native builds if needed; use
+  `--format docker` with Podman when checking the image's HEALTHCHECK metadata.
+  A rootless bind mount must be writable by the container UID (for example,
+  `podman unshare chown 1000:1000 <temporary-test-directory>`).
+- Update `readme.md` with validated versions and any compatibility exceptions.
+  As of October 2026, Python 3.15.0's Nix closure failed in tkinter tests, so
+  Python 3.14.7 is used in both environments. Current nixpkgs dropped Intel
+  macOS; Apple Silicon evaluation is blocked by the Slack build dependency
+  `jaraco-path` being marked broken. Recheck these upstream issues on the next
+  update rather than silently bypassing failures or claiming untested support.
+
 The multi-stage `Dockerfile` serves the built UI and API as UID/GID 1000:1000 with `PC1_DATA_DIR=/data`. `docker-compose.yaml` and `portainer-compose.yaml` both use an absolute host bind mount (`/path/to/data:/data`); replace the example host path before deployment. Both run as `user: "${PUID:-1000}:${PGID:-1000}"`; PUID/PGID must match the owner of the data directory. Their root filesystem is read-only with a temporary `/tmp`. Settings, generated login password and Adventure saves belong under `/data`; bundled datasets, icons and fonts remain read-only in the image. Restoring defaults means stopping the stack and clearing the dedicated host bind-mount directory; `down -v` does not remove bind-mounted files. The container runs one Uvicorn worker because scheduling and printer reservations are process-local. Container printing defaults to `esp32`; use `console` for smoke tests without firmware.
 
 ## Console Raster Preview for Print Debugging

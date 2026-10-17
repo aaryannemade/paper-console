@@ -1,14 +1,15 @@
 # Build the settings UI separately; no Node.js is needed in the runtime image.
 # The output is static JS/CSS, so build it once on the native build platform
 # instead of under emulation for each target architecture.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:26.12.0-alpine AS frontend
 WORKDIR /build/web
+RUN npm install --global npm@12.2.0
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.14.7-slim-trixie AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PC1_DATA_DIR=/data \
@@ -17,7 +18,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
+    && python -m pip install --no-cache-dir -r requirements.txt \
     && groupadd --gid 1000 paper \
     && useradd --uid 1000 --gid paper --no-create-home --home-dir /data paper
 
