@@ -1,8 +1,11 @@
 # Container + ESP32-S3 migration plan
 
-Status: architecture confirmed; Steps 1–5 (container side) implemented.
-ESP32 firmware is Step 6. Printer UART
-details for the firmware are in [printer-uart-reference.md](printer-uart-reference.md).
+Status: Steps 1–5 (container side) and the core Step 6 firmware are implemented.
+WiFi printing, physical encoder/button input and corrected raster geometry have
+been verified on the XIAO ESP32S3. Step 6 hardware acceptance is still partial;
+Steps 7–10 add channel indication, browser flashing, device health visibility and
+a 10-second encoder-button reboot. Step 11 closes out hardware/container validation.
+Printer UART details are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
 
@@ -28,7 +31,9 @@ The container owns channel selection, button-action interpretation, interactive
 modules, scheduling, content generation and CSN-A2 print-command generation.
 Firmware owns input sampling/debouncing, provisioning, link reporting, bounded
 transport buffering and UART pacing/flow control. It does not render receipts or
-implement channel/module logic.
+implement channel/module logic. It maps incremental encoder detents to a local
+1–8 position and reports that position to the container; module names and menu
+semantics remain container-owned. A local hardware reboot is a firmware action.
 
 1. ESP32 joins WiFi using credentials configured in its captive portal/web UI.
 2. ESP32 registers its device identity and HTTP callback address with the configured
@@ -54,12 +59,17 @@ busy/cancel/error responses, heartbeat expiry and restart reconciliation in
 Keep the ESP32 HTTP server responsive during UART transfer so input/heartbeat/status
 traffic does not deadlock while the container is pushing a receipt.
 
-## Remaining implementation
+## Implementation status and next milestones
 
-| Area | Main locations | Required change |
+| Area | Main locations | Status / next work |
 | --- | --- | --- |
 | Container packaging | `Dockerfile`, `docker-compose.yaml`, `portainer-compose.yaml`, `app/paths.py` | Multi-stage image, mounted data directory, non-root runtime and health check (Step 4 complete). |
-| ESP32 firmware | [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implement the reference protocol and hardware UART on the chosen ESP32-S3 board. |
+| ESP32 core (Step 6) | `firmware/`, [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implemented; physical prints/input verified. Failure/recovery, cancellation and scheduling acceptance still pending. |
+| Channel indication (Step 7) | Encoder firmware, prospective display hardware, container channel metadata | Choose an indication method; OLED is a candidate, not yet selected. |
+| Browser flashing (Step 8) | Firmware release CI, GitHub Pages installer | Build/publish board-specific binaries and a Web Serial flashing page. |
+| Device health (Step 9) | Firmware HTTP API/UI, container link UI | Add firmware health endpoint and an at-a-glance printer/link indicator. |
+| Hardware reboot gesture (Step 10) | Encoder button firmware and gesture protocol/docs | Hold encoder button 10 s to reboot the ESP32 without erasing settings. |
+| Final acceptance (Step 11) | Real ESP32/printer, container deployment, protocol checks | Validate failure/recovery, scheduling, menus, flashing and all new device features. |
 
 ## Step 1 — Remove WiFi provisioning end to end
 
@@ -180,20 +190,177 @@ shutdown; smoke test a mock print via HTTP from outside the container.
   `nmcli`, `sudo`, `systemctl`, `raspi-config` or `chpasswd`. Application settings
   and credentials remain writable pending the Step 4 mounted-data directory.
 
-## Step 6 — ESP32-S3 firmware
+## Step 6 — ESP32-S3 firmware (core implemented; acceptance partial)
 
-- Implement `docs/relay-protocol.md` on the ESP32-S3: captive portal, persistent
-  WiFi/container URL/token configuration, local link-status UI, heartbeat, input
-  events, HTTP print receiver and CSN-A2 UART relay.
-- Map the rotary encoder with push switch to the protocol's position and button
-  gestures. Confirm board pin assignments when wiring.
-- Follow [printer-uart-reference.md](printer-uart-reference.md) for serial
-  settings, raster strip framing, DTR handling and throughput/buffer sizing.
-- Keep the HTTP server responsive during UART transfer.
+Implemented:
 
-Acceptance: the firmware passes the same protocol tests as the Step 3c simulator;
-physical completion/failure and scheduled and input-triggered prints are tested on
-hardware.
+- Nix development shell includes PlatformIO and esptool; `just fw-build`,
+  `fw-flash`, `fw-monitor` and `fw-erase` cover the device workflow. The monitor
+  uses an absolute project path to avoid PlatformIO's relative-path decoder bug.
+- PlatformIO/Arduino firmware for **Seeed XIAO ESP32S3**, with 8 MB flash/PSRAM
+  detected on the test board. Printer TX is D6/GPIO43, RX is D7/GPIO44, at
+  **9600 8N1**, with a shared ground and independently powered printer.
+- Captive setup AP `PaperConsole-XXXXXX` at `192.168.4.1`; WiFi credentials,
+  server URL and relay token persist in NVS. Network mode advertises
+  `http://paper-console.local/`. BOOT held 5 s currently erases device settings.
+- Scans run before opening the AP; refresh scans run in the background with
+  short dwell times and merge a cache. Found networks are shown as tappable
+  entries instead of relying on a captive browser's datalist support.
+- The settings page is deliberately open to the LAN/setup network. The relay
+  token is write-only in this page and authenticates server↔device traffic only;
+  it is not an administrator password.
+- Heartbeat, authenticated job creation/chunks/status/cancel, deduplication and
+  bounded buffering implement the relay contract. Independent UART, network
+  and input tasks keep HTTP and inputs responsive during a receipt.
+- USB logging uses a bounded nonzero timeout and avoids holding status locks
+  while writing, fixing hangs when the cable is connected but no monitor reads it.
+- DFRobot SEN0235 EC11 module: VCC=3V3, A=D0/GPIO1, B=D1/GPIO2,
+  C=D3/GPIO4. Physical tests confirmed active-low button and four quadrature
+  transitions per detent. Clockwise increments; one detent selects one position,
+  wrapping 1–8. Position persists after the knob rests and is resynchronized
+  when the server link recovers. This is incremental selection, not an absolute
+  shaft angle; a fixed printed pointer legend is deferred in favour of Step 7.
+- Debounced `press`, 5-second `hold`, and `hold_release` events carry position,
+  unique event IDs and shared per-press IDs. A dedicated sender orders events,
+  retries the same IDs and drops stale events instead of replaying late presses.
+- The normal ESP32 output now uses **64-row RAM downloaded bitmaps** (`GS *`
+  then `GS / 0`) instead of streaming `GS v 0`. Native USB keeps its existing
+  format. Definition+print stay in one opaque relay record; no reflash was
+  required. Smaller advertised chunks shorten bands in eight-row units.
+
+Hardware findings and verified results:
+
+- Captive setup, WiFi printing from the development backend, web-UI prints,
+  knob position events and button-triggered channel printing work on hardware.
+- Identical calibration pixels stretched vertically with both 9600-baud UART
+  and USB paced at 960 bytes/s, isolating slow raster arrival as the trigger.
+  Downloaded bitmaps corrected the distortion and darkness. 24/48/64-row bands
+  worked; 128/256 failed. Use the validated **64 rows / 3072 image bytes** rather
+  than the generic manual's unverified maximum.
+- The user measured both native-USB and new ESP32 calibration squares at
+  **24×24 mm with calipers**, then confirmed normal channel prints were fixed.
+  Remaining stop/start seams on dithered/grey fills were accepted. Baudrate,
+  heat and density settings were not changed.
+- Simulator decoding handles both bitmap encodings. The post-change backend
+  suite passed **346 tests**. Device `completed` still means UART delivery, not
+  proof of paper output; printer readiness is currently assumed and no DTR
+  input or physical paper/offline sensing is implemented.
+
+Still pending: real-device protocol parity checks, cancellation/menu interaction,
+scheduled prints, WiFi/server/device restart recovery and production-container
+end-to-end acceptance. Track these in Step 11; simulator coverage does not count
+as hardware acceptance. Quick Actions UX clarification is also deferred there.
+
+## Step 7 — Show the selected channel (planned)
+
+- Decide how the user sees the selected channel on the endless rotary encoder.
+  Evaluate a small **OLED screen** against simpler indicators; choose the part,
+  supply voltage, interface and wiring before implementing a display driver.
+  D4/GPIO5 and D5/GPIO6 remain available as candidate I²C SDA/SCL pins.
+- Show position 1–8, and preferably the server-configured channel name. Define
+  a minimal server→device metadata/status contract rather than duplicating the
+  channel configuration or menu logic in firmware.
+- Keep the position display responsive during printing; define disconnected
+  and reconnect states and how selection menus differ from ordinary channels.
+- Keep physical position and the displayed selection synchronized after boot,
+  server restart and configuration changes. A future screen-based selector can
+  build on this without relying on an absolute-angle knob or fixed legend.
+
+Acceptance: each detent visibly selects the correct position, button actions
+match that position, and offline/printing/menu states are understandable on the
+chosen indicator. Hardware choice remains open until evaluated.
+
+## Step 8 — GitHub Pages firmware flasher (planned)
+
+- Add a static, HTTPS **GitHub Pages** installer using ESP Web Tools/Web Serial
+  so users can connect a XIAO ESP32S3 and flash from a supported desktop browser.
+- Add CI to compile the pinned PlatformIO environment, assign a firmware version
+  and publish versioned firmware binaries and installer manifests. Derive flash
+  offsets from build outputs (or generate a merged image); do not guess them.
+- Provide a clear connect/flash flow, board identification, BOOT/reset recovery
+  instructions and links to WiFi setup at `192.168.4.1` / `paper-console.local`.
+- Decide and document whether each flashing action preserves NVS or performs a
+  clean setup. Make an erase action explicit so updates do not unexpectedly
+  remove WiFi/server/token settings. Never embed credentials in release assets.
+- Keep the CLI flash path available. Explain browser/platform support and USB
+  permissions when Web Serial is unavailable.
+
+Acceptance: a fresh board can be flashed from the published Pages site, complete
+captive setup and print a receipt; an update preserves settings as documented.
+The published manifest/binaries correspond to the displayed firmware version.
+
+## Step 9 — Firmware health endpoint and at-a-glance status (planned)
+
+- Add a lightweight firmware **`GET /health`** endpoint with a versioned JSON
+  shape: firmware version/uptime, WiFi connectivity, server-link status, UART
+  readiness, active job and last job outcome. Keep it responsive during printing.
+- Add a prominent summary to the **device web UI** (and align the server's relay
+  status display) so users can immediately see ready, printing, disconnected,
+  error or unknown, without inspecting raw JSON or USB logs.
+- Distinguish **relay/UART ready** from **printer physically responding**. With
+  today's wiring and no validated status query, do not claim that paper is
+  present or the printer is powered merely because WiFi/UART initialization works.
+- Investigate printer status replies and/or an optional busy/paper signal,
+  including electrical levels, bounded timeouts and actual device support. Show
+  unavailable/unknown when physical status cannot be verified. Define how stale
+  health/heartbeat information appears in both UIs.
+- Document which health fields are public and keep secrets out of responses.
+  Health visibility does not bypass bearer auth on print jobs or input events.
+
+Acceptance: the device page visibly changes between idle/printing/link loss and
+recovery; the endpoint remains responsive during a long receipt. Any claim of
+physical printer availability is backed by a tested signal, otherwise labeled
+unknown rather than inferred.
+
+## Step 10 — Encoder-button 10-second hardware reboot (planned)
+
+- Holding the **encoder push button** for 10 seconds reboots the ESP32 locally,
+  preserving NVS WiFi/server/token and saved channel position. This is a device
+  reboot, not a reset of container settings or a host reboot. Settings erasure
+  remains the separate existing BOOT-button action.
+- Integrate with the current gestures: a 5-second hold may already trigger a
+  tactile feed or print cancellation. At 10 seconds consume the press locally,
+  show/log reboot feedback, and suppress the corresponding `hold_release` so it
+  cannot open Quick Actions or print after the reboot.
+- Do not blindly reboot inside a bitmap definition. Request cancellation and
+  coordinate the reboot at a complete UART-record boundary with a bounded wait;
+  on an unrecoverable stall, report/record what is possible and never replay the
+  uncertain receipt after boot. Account for the new boot ID and link recovery.
+- If the button remains held across reboot, wait for release before rearming it;
+  prevent reboot loops and accidental startup presses. Update protocol and UI
+  instructions if the gesture contract needs additional state.
+
+Acceptance: short press and 5-second Quick Actions/cancel continue working;
+10 seconds causes exactly one ESP32 reboot and no Quick Actions on release.
+Settings survive, an active print stops at a safe boundary when possible, and
+the relay rejoins and resynchronizes position without replaying a print.
+
+## Step 11 — Hardware acceptance and migration closeout (pending)
+
+- Exercise the real firmware against the simulator's contract: auth failures,
+  duplicate create/chunks/events, ordering/backpressure, status polling fallback,
+  cancellation and terminal job states. Add a targeted real-device test mode
+  where useful, distinguishing transport checks from tests that consume paper.
+- Test cancellation during a long receipt and confirm the cancelled press cannot
+  also open Quick Actions. Revisit the confusing Quick Actions interaction:
+  menu choices, invalid positions, timeout and cancel behaviour, plus how Step 7
+  presents the current menu. Document the final user interaction.
+- Test WiFi loss/reconnect, backend restart, ESP32 restart mid-job and printer
+  availability changes to the extent that Step 9 can actually detect them. No
+  duplicate print or stale input may replay on recovery; offline jobs are skipped.
+- Run the production container with its real data bind mount and ESP32 output.
+  Verify scheduled, physical-button and web-UI prints, container recreation with
+  persisted settings/password/saves, and relay recovery after recreation.
+- Validate the channel indicator, public browser-flashing flow, health UI and
+  10-second reboot on hardware, including first-time onboarding and updates.
+- Reconcile README, protocol, UART reference and troubleshooting with the final
+  behaviour; record accepted limits (9600-baud throughput, dithering seams,
+  band-boundary cancellation latency and any unverified physical printer state).
+
+Acceptance: record actual hardware results for the above checks, keep backend
+tests/frontend checks/container smoke CI passing, and remove stale "firmware
+planned" statements. The core migration is complete when these results are
+recorded; future display-driven UX extensions can then be planned separately.
 
 Step 1a verification: 313 backend tests pass, including startup/shutdown checks for
 both first and subsequent boots, authentication independent of AP state, and task
@@ -342,4 +509,6 @@ Sudoku print as a non-root user with a read-only root filesystem, configurable
 listener port and healthy Docker image check; settings and generated login
 password both survived container recreation with the same `/data` bind mount.
 
-Next implementation: Step 6 (ESP32-S3 firmware).
+Current implementation checkpoint: Step 6 core firmware and hardware raster fix
+are complete. Next: Step 7 channel-indication decision, followed by Steps 8–10;
+use Step 11 to collect the remaining acceptance results throughout that work.
