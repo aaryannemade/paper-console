@@ -297,7 +297,7 @@ Acceptance: a fresh board can be flashed from the published Pages site, complete
 captive setup and print a receipt; an update preserves settings as documented.
 The published manifest/binaries correspond to the displayed firmware version.
 
-## Step 9 — Firmware health endpoint and at-a-glance status (implemented; hardware test pending)
+## Step 9 — Firmware health endpoint and at-a-glance status (implemented and hardware-tested)
 
 Implemented: the settings top bar shows a green/amber/red dot from
 `GET /api/printer/link` (`indicator.level` and a one-line `indicator.label`),
@@ -363,14 +363,19 @@ by accident.
 Acceptance: short press, 5 s Quick Actions and hold-to-cancel still work;
 holding 10 s alone and releasing prints nothing and opens no menu; the full
 sequence erases settings and opens the setup network; each cancel path leaves
-settings intact and the knob working normally.
+settings intact and the knob working normally. **Passed on real hardware
+2026-10-17 — see [hardware-acceptance.md](hardware-acceptance.md) for the full
+result.**
 
-## Step 11 — Hardware acceptance and migration closeout (pending)
+## Step 11 — Hardware acceptance and migration closeout (in progress)
 
 Use [hardware-acceptance.md](hardware-acceptance.md) as the combined execution
 checklist for the implemented health/status, channel-sync/boot-position and
-encoder-reset changes. These remain unverified on real hardware; software
-tests and a successful firmware build do not mark them accepted.
+encoder-reset changes. The combined firmware-and-software acceptance for
+Steps 7 (channel metadata), 9 (health/status) and 10 (encoder reset) passed
+on real hardware 2026-10-17; see the Results section in that file. Remaining
+items in this step are now scoped to container/scheduler/recovery acceptance
+and final documentation.
 
 - Exercise the real firmware against the simulator's contract: auth failures,
   duplicate create/chunks/events, ordering/backpressure, status polling fallback,
@@ -388,6 +393,10 @@ tests and a successful firmware build do not mark them accepted.
   persisted settings/password/saves, and relay recovery after recreation.
 - Validate the channel indicator, public browser-flashing flow, health UI and
   encoder reset sequence on hardware, including first-time onboarding and updates.
+  - Channel metadata, health UI and encoder reset: **passed on real hardware
+    2026-10-17** (see [hardware-acceptance.md](hardware-acceptance.md)). The
+    channel indicator without the OLED and the browser-flashing flow remain
+    separate items.
 - Reconcile README, protocol, UART reference and troubleshooting with the final
   behaviour; record accepted limits (9600-baud throughput, dithering seams,
   band-boundary cancellation latency and any unverified physical printer state).
