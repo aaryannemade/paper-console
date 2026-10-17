@@ -23,7 +23,7 @@ small{color:#666}.ok{color:#18794e}.bad{color:#b42318}#msg{min-height:1.2em}
 #nets button.sel{background:#e4e0d6}#nets span{color:#666;white-space:nowrap;margin-left:.5rem}
 </style></head><body><main>
 <h1>Paper Console relay</h1>
-<section><table id="st"><tr><td>Status</td><td>loading&hellip;</td></tr></table></section>
+<section><h2 id="summary" role="status">Loading status…</h2><p><small>Physical printer: unknown — paper and power are not sensed.</small></p><table id="st"><tr><td>Status</td><td>loading&hellip;</td></tr></table></section>
 <form id="f">
 <h2>WiFi network</h2>
 <label for="ssid">Network name</label>
@@ -49,20 +49,24 @@ small{color:#666}.ok{color:#18794e}.bad{color:#b42318}#msg{min-height:1.2em}
 const $=id=>document.getElementById(id);let filled=false;
 function row(k,v,c){return `<tr><td>${k}</td><td${c?` class="${c}"`:''}>${v}</td></tr>`}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-async function status(){try{const s=await (await fetch('/ui/status')).json();
+async function status(){try{const r=await fetch('/ui/status',{signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error(r.status);const s=await r.json();
+const health=s.health;$('summary').textContent=({ready:'Ready to send to UART',printing:'Printing',disconnected:'Disconnected',error:'Error — check details below',unknown:'Unknown'})[health.status]||'Unknown';
+$('summary').className=health.status==='ready'?'ok':health.status==='printing'?'':'bad';
 let h=row('Device',esc(s.device_id)+' &middot; v'+esc(s.firmware));
+h+=row('Uptime',health.uptime_s+' s');
 h+=row('WiFi',s.wifi_connected?esc(s.ssid)+' &middot; '+esc(s.ip):(s.ssid?'connecting to '+esc(s.ssid)+'&hellip;':'not configured'),s.wifi_connected?'ok':'bad');
 if(s.ap_active)h+=row('Setup network',esc(s.ap_ssid)+' &middot; '+esc(s.ap_ip));
 h+=row('Server',s.server?esc(s.server):'not set',s.server?'':'bad');
 h+=row('Link',esc(s.link.message)+(s.link.last_ok_s>=0&&!s.link.ok?' (last ok '+s.link.last_ok_s+' s ago)':''),s.link.ok?'ok':'bad');
-h+=row('Printer',esc(s.printer.state)+(s.printer.active_job?' &middot; job '+esc(s.printer.active_job.slice(0,8)):''));
+h+=row('UART',health.uart_ready?'Ready (9600 baud)':'Unavailable',health.uart_ready?'ok':'bad');
+h+=row('Active job',esc(health.active_job_state)+(health.active_job_id?' &middot; '+esc(health.active_job_id):'None'));
 h+=row('Last job',esc(s.printer.last_job));
 h+=row('Channel',s.channel.position+(s.channel.name?' &middot; '+esc(s.channel.name):''));
 $('st').innerHTML=h;
 if(!filled){filled=true;$('ssid').value=s.ssid||'';$('server').value=s.server||'';
 if(s.token_set)$('tokhint').textContent='A token is saved. Leave blank to keep it, or enter a new one (same value as PC1_RELAY_TOKEN on the server).';
 if(s.ssid)$('passhint').textContent='Leave blank to keep the saved password (same network) or for an open network.'}
-}catch(e){}}
+}catch(e){$('summary').textContent='Device unreachable — status is stale';$('summary').className='bad'}finally{setTimeout(status,4000)}}
 function bars(r){return r>=-55?'▂▄▆█':r>=-67?'▂▄▆':r>=-78?'▂▄':'▂'}
 function showNets(s){const ul=$('nets');ul.innerHTML='';
 for(const x of s.networks){const li=document.createElement('li'),b=document.createElement('button');
@@ -80,6 +84,6 @@ $('f').onsubmit=async e=>{e.preventDefault();$('msg').className='';$('msg').text
 try{const r=await fetch('/ui/save',{method:'POST',body:new URLSearchParams(new FormData($('f')))});const j=await r.json();
 $('msg').className=j.ok?'ok':'bad';$('msg').textContent=j.message}catch(e){$('msg').textContent='Device restarting…'}};
 $('test').onclick=async()=>{try{const j=await (await fetch('/ui/test-print',{method:'POST'})).json();$('tmsg').textContent=j.message}catch(e){$('tmsg').textContent='Failed'}};
-status();setInterval(status,4000);
+status();
 </script></body></html>
 )HTML";

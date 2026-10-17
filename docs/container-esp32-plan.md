@@ -67,7 +67,7 @@ traffic does not deadlock while the container is pushing a receipt.
 | ESP32 core (Step 6) | `firmware/`, [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implemented; physical prints/input verified. Failure/recovery, cancellation and scheduling acceptance still pending. |
 | Channel indication (Step 7) | Encoder firmware, prospective display hardware, container channel metadata | Channel names done end to end (UI, hash-triggered fetch to the device). Choose the display (OLED candidate) and render. |
 | Browser flashing (Step 8) | Firmware release CI, GitHub Pages installer | Build/publish board-specific binaries and a Web Serial flashing page. |
-| Device health (Step 9) | Firmware HTTP API/UI, container link UI | Settings UI status dot done. Add firmware health endpoint and device-page summary. |
+| Device health (Step 9) | Firmware HTTP API/UI, container link UI | Health endpoint, heartbeat telemetry and both status UIs implemented; combined hardware acceptance pending. |
 | Encoder reset sequence (Step 10) | `firmware/src/inputs.cpp`, `hold_cancel` gesture | Implemented (hold 10 s, clockwise, anticlockwise, click = erase settings); hardware test pending. |
 | Final acceptance (Step 11) | Real ESP32/printer, container deployment, protocol checks | Validate failure/recovery, scheduling, menus, flashing and all new device features. |
 
@@ -297,7 +297,7 @@ Acceptance: a fresh board can be flashed from the published Pages site, complete
 captive setup and print a receipt; an update preserves settings as documented.
 The published manifest/binaries correspond to the displayed firmware version.
 
-## Step 9 — Firmware health endpoint and at-a-glance status (server dot implemented)
+## Step 9 — Firmware health endpoint and at-a-glance status (implemented; hardware test pending)
 
 Implemented: the settings top bar shows a green/amber/red dot from
 `GET /api/printer/link` (`indicator.level` and a one-line `indicator.label`),
@@ -307,12 +307,19 @@ or development `console` output. Red: no/expired heartbeat, unreachable relay,
 non-printable reported printer state, unavailable USB output or the status
 request failing. It is deliberately visual only; troubleshooting stays with the
 container logs, ESP32 web UI and serial monitor. Green does not prove paper.
-Remaining below: the firmware-side health endpoint and device-page summary.
+Implemented: public firmware `GET /health` schema v1, shared with `/ui/status`
+and authenticated heartbeat telemetry; the ESP32 page and server General →
+Printer Settings show health, uptime, connection, UART, active job and last
+outcome. Stale/missing reports are explicit. Physical printer status remains
+`unknown` because no validated paper/power signal exists. See
+`relay-protocol.md` for the contract. All pending hardware verification for
+Steps 7 (metadata only), 9 and 10 is consolidated in
+[hardware-acceptance.md](hardware-acceptance.md).
 
-- Add a lightweight firmware **`GET /health`** endpoint with a versioned JSON
+- Implemented a lightweight firmware **`GET /health`** endpoint with a versioned JSON
   shape: firmware version/uptime, WiFi connectivity, server-link status, UART
   readiness, active job and last job outcome. Keep it responsive during printing.
-- Add a prominent summary to the **device web UI** (and align the server's relay
+- Implemented a prominent summary in the **device web UI** (and aligned the server's relay
   status display) so users can immediately see ready, printing, disconnected,
   error or unknown, without inspecting raw JSON or USB logs.
 - Distinguish **relay/UART ready** from **printer physically responding**. With
@@ -359,6 +366,11 @@ sequence erases settings and opens the setup network; each cancel path leaves
 settings intact and the knob working normally.
 
 ## Step 11 — Hardware acceptance and migration closeout (pending)
+
+Use [hardware-acceptance.md](hardware-acceptance.md) as the combined execution
+checklist for the implemented health/status, channel-sync/boot-position and
+encoder-reset changes. These remain unverified on real hardware; software
+tests and a successful firmware build do not mark them accepted.
 
 - Exercise the real firmware against the simulator's contract: auth failures,
   duplicate create/chunks/events, ordering/backpressure, status polling fallback,

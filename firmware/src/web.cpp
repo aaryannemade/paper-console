@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "channels.h"
+#include "health.h"
 #include "inputs.h"
 #include "netmgr.h"
 #include "portal_html.h"
@@ -157,6 +158,7 @@ esp_err_t handleStatus(httpd_req_t* req) {
   relay::Snapshot snap = relay::snapshot();
   uplink::LinkState link = uplink::state();
   JsonDocument doc;
+  health::toJson(doc["health"].to<JsonObject>());
   doc["device_id"] = relay::deviceId();
   doc["firmware"] = PC1_FIRMWARE_VERSION;
   doc["ssid"] = s.ssid;
@@ -178,6 +180,14 @@ esp_err_t handleStatus(httpd_req_t* req) {
   doc["channel"]["name"] = channels::name(position);
   channels::toJson(doc["channels"].to<JsonObject>());
   doc["uptime_s"] = millis() / 1000;
+  String body;
+  serializeJson(doc, body);
+  return sendJson(req, 200, body);
+}
+
+esp_err_t handleHealth(httpd_req_t* req) {
+  JsonDocument doc;
+  health::toJson(doc.to<JsonObject>());
   String body;
   serializeJson(doc, body);
   return sendJson(req, 200, body);
@@ -429,6 +439,7 @@ void begin() {
   }
   route("/", HTTP_GET, handleIndex);
   route("/ui/status", HTTP_GET, handleStatus);
+  route("/health", HTTP_GET, handleHealth);
   route("/ui/scan", HTTP_GET, handleScan);
   route("/ui/save", HTTP_POST, handleSave);
   route("/ui/test-print", HTTP_POST, handleTestPrint);

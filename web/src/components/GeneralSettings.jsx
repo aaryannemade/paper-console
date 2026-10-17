@@ -265,6 +265,16 @@ const GeneralSettings = ({
             {printerLink?.output_mode === 'esp32' && (
               <div className='text-xs text-gray-600 mt-1 space-y-0.5'>
                 {!printerLink.available && <p>{printerLink.reason}</p>}
+                {printerLink.health ? (
+                  <div className='space-y-1' aria-live='polite'>
+                    <p className='font-bold'>Device health: {printerLink.health_stale ? 'Stale — last reported values below' : printerLink.health.status}</p>
+                    <p>Uptime at report: {printerLink.health.uptime_s} s · WiFi: {printerLink.health.wifi_connected ? 'connected' : 'disconnected'}</p>
+                    <p>Server link: {printerLink.health.server_state} — {printerLink.health.server_detail}</p>
+                    <p>UART: {printerLink.health.uart_ready ? 'ready' : 'unavailable'} · Physical printer: unknown (paper and power are not sensed)</p>
+                    <p>Active job: {printerLink.health.active_job_id ? `${printerLink.health.active_job_state} · ${printerLink.health.active_job_id}` : 'none'}</p>
+                    <p>Last device job: {printerLink.health.last_job_state || 'none'}{printerLink.health.last_job_error ? ` — ${printerLink.health.last_job_error}` : ''}</p>
+                  </div>
+                ) : <p>Device health unavailable — waiting for firmware health reports. Physical printer status is unknown.</p>}
                 {printerLink.device_id && (
                   <p>
                     {printerLink.device_id}

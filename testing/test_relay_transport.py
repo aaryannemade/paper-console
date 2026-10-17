@@ -75,6 +75,52 @@ def test_decode_raster_inverts_encoding():
 # --- link state ---------------------------------------------------------------------
 
 
+def test_public_health_does_not_expose_credentials_or_unlock_jobs():
+    with RelaySimulator("http://127.0.0.1:1", TOKEN, heartbeat=False) as sim:
+        response = requests.get(sim.url + "/health", timeout=2)
+        assert response.status_code == 200
+        health = response.json()
+        assert health["schema_version"] == 1
+        assert health["physical_printer"] == "unknown"
+        assert health["server_state"] == "unknown"
+        assert TOKEN not in response.text
+        assert "127.0.0.1:1" not in response.text
+        assert requests.get(sim.url + "/jobs/private", timeout=2).status_code == 401
+
+
+def test_health_freshness_recovery_and_old_firmware(token_env):
+    now = [100.0]
+    link = DeviceLink(clock=lambda: now[0])
+    sim = RelaySimulator("http://127.0.0.1:1", TOKEN, heartbeat=False)
+    sim.last_heartbeat_ok = time.monotonic()
+    health = sim.health()
+    link.record_heartbeat(_heartbeat(health=health))
+    assert link.snapshot()["health"]["status"] == "ready"
+    assert not link.snapshot()["health_stale"]
+    now[0] += 21
+    assert link.snapshot()["health_stale"]
+    now[0] += 10
+    assert link.snapshot()["state"] == "offline"
+    link.record_heartbeat(_heartbeat(health=health))
+    assert not link.snapshot()["health_stale"]
+    link.mark_unreachable("connection refused")
+    assert link.snapshot()["health_stale"]
+    link.record_heartbeat(_heartbeat(boot_id="new-boot"))
+    assert link.snapshot()["health"] is None
+
+
+def test_simulator_health_link_timeout_and_uart_failure():
+    sim = RelaySimulator("http://127.0.0.1:1", TOKEN, heartbeat=False)
+    sim.last_heartbeat_ok = time.monotonic() - 31
+    assert sim.health()["status"] == "disconnected"
+    sim.last_heartbeat_ok = time.monotonic()
+    assert sim.health()["status"] == "ready"
+    sim.printer_state = "error"
+    assert sim.health()["status"] == "error"
+    assert sim.health()["uart_ready"] is False
+    assert sim.health()["physical_printer"] == "unknown"
+
+
 def _heartbeat(**overrides):
     payload = {
         "device_id": "dev1",
@@ -310,6 +356,12 @@ def test_receipt_round_trip_is_byte_exact(make_sim, output):
     assert _same(decoded.crop((0, 0, img.width, img.height)), img)
     assert decoded.height == 136  # Final band padded to an eight-row boundary.
     assert relay_link.link.snapshot()["last_job"]["state"] == "completed"
+    health = requests.get(sim.url + "/health", timeout=2).json()
+    assert health["last_job_state"] == "completed"
+    assert health["last_job_id"] == stats["job_id"]
+    assert health["active_job_id"] == ""
+    sim.send_heartbeat()
+    assert relay_link.link.snapshot()["health"]["last_job_id"] == stats["job_id"]
 
 
 def test_device_refetches_channel_names_only_when_hash_changes(make_sim, monkeypatch):
@@ -360,6 +412,9 @@ def test_cancel_stops_between_records(make_sim, output):
     worker = threading.Thread(target=run)
     worker.start()
     assert sim.wait_for(lambda: sim.active is not None and sim.active.records_written >= 1)
+    health = requests.get(sim.url + "/health", timeout=2).json()
+    assert health["status"] == "printing"
+    assert health["active_job_state"] == "printing"
     cancel.set()
     worker.join(timeout=10)
 

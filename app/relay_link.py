@@ -65,6 +65,26 @@ class DeviceLimits(BaseModel):
     max_job_bytes: int = Field(default=1024 * 1024, ge=1024, le=64 * 1024 * 1024)
 
 
+class DeviceHealth(BaseModel):
+    """Version 1 cached firmware diagnostics; never proof of paper/power."""
+
+    model_config = ConfigDict(extra="ignore")
+    schema_version: Literal[1] = 1
+    uptime_s: int = Field(ge=0)
+    status: Literal["ready", "printing", "disconnected", "error", "unknown"]
+    wifi_connected: bool
+    server_state: Literal["connected", "disconnected", "unknown"]
+    server_detail: str = Field(default="", max_length=200)
+    server_last_ok_s: int = Field(default=-1, ge=-1)
+    uart_ready: bool
+    physical_printer: Literal["unknown"] = "unknown"
+    active_job_id: str = Field(default="", max_length=64)
+    active_job_state: str = Field(default="", max_length=16)
+    last_job_id: str = Field(default="", max_length=64)
+    last_job_state: str = Field(default="", max_length=16)
+    last_job_error: str = Field(default="", max_length=300)
+
+
 class Heartbeat(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -75,6 +95,7 @@ class Heartbeat(BaseModel):
     printer: PrinterReport = Field(default_factory=PrinterReport)
     limits: DeviceLimits = Field(default_factory=DeviceLimits)
     active_job_id: Optional[str] = Field(default=None, max_length=64)
+    health: Optional[DeviceHealth] = None
 
     @field_validator("callback_url")
     @classmethod
@@ -300,6 +321,8 @@ class DeviceLink:
                 "heartbeat_age_s": age,
                 "unreachable_error": self.unreachable_error,
                 "last_job": last_job,
+                "health": device.health.model_dump() if device and device.health else None,
+                "health_stale": age is None or age > 2 * HEARTBEAT_INTERVAL_SECONDS or state != "online",
             }
 
 
@@ -337,6 +360,11 @@ def status_indicator(snapshot: dict, output_mode: str, output_available: bool) -
     age = snapshot.get("heartbeat_age_s")
     if age is not None and age > LATE_HEARTBEAT_SECONDS:
         return {"level": "amber", "label": f"ESP32 heartbeat late ({int(age)} s)"}
+    health = snapshot.get("health") or {}
+    if health.get("status") == "error":
+        return {"level": "red", "label": "ESP32 reports an error"}
+    if health.get("status") in ("unknown", "disconnected"):
+        return {"level": "amber", "label": "ESP32 server link recovering"}
     return {"level": "green", "label": "ESP32 online, ready to print"}
 
 

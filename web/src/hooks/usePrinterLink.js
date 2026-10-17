@@ -13,25 +13,27 @@ export function usePrinterLink(enabled = true) {
       return undefined;
     }
     let cancelled = false;
+    let timer;
     const fetchLink = async () => {
       try {
-        const response = await adminAuthFetch('/api/printer/link');
+        const response = await adminAuthFetch('/api/printer/link', { signal: AbortSignal.timeout(5000) });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (!cancelled) setLink(data);
       } catch (err) {
         console.error('Error fetching printer link:', err);
         if (!cancelled) {
-          setLink({ indicator: { level: 'red', label: 'Printer status unavailable' } });
+          setLink(previous => ({ ...previous, health_stale: true, indicator: { level: 'red', label: 'Printer status unavailable' } }));
         }
+      } finally {
+        if (!cancelled) timer = setTimeout(fetchLink, POLL_INTERVAL_MS);
       }
     };
 
     fetchLink();
-    const interval = setInterval(fetchLink, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      clearTimeout(timer);
     };
   }, [enabled]);
 

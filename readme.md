@@ -333,6 +333,20 @@ Available modules: **News API**, **RSS Feeds**, **Weather**, **Email Inbox**, **
 
 ### Printer Status API
 
+The ESP32 provides public `GET /health` (schema version 1) with firmware version,
+uptime, WiFi/server-link state, UART readiness, active job and last job outcome.
+Its web page shows the same summary. General Settings → Printer Settings shows
+the device's health from authenticated heartbeats, marking telemetry stale after
+20 seconds and the relay offline after 30 seconds. Older firmware shows health
+unavailable. Failed UI polls also mark retained status stale.
+
+**Physical printer status is unknown:** UART readiness/completion does not prove
+power, paper or successful physical printing. No unvalidated status-query bytes
+are sent to the printer. Firmware health contains no credentials or configured
+server URL. See [the health contract](docs/relay-protocol.md#firmware-health-and-settings-telemetry-schema-1)
+and the [combined hardware acceptance checklist](docs/hardware-acceptance.md)
+for health, channel synchronization and encoder-reset testing.
+
 Webhook clients can poll `GET /api/printer/status` without authentication. It returns
 `{"ready": true, "reason": "idle"}` when the printer driver is available and no
 print or button-hold action has reserved it. Otherwise, `ready` is `false` with

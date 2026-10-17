@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "channels.h"
+#include "health.h"
 #include "relay.h"
 #include "settings.h"
 
@@ -53,6 +54,7 @@ uint32_t sendHeartbeat() {
   doc["device_id"] = relay::deviceId();
   doc["boot_id"] = relay::bootId();
   doc["firmware"] = PC1_FIRMWARE_VERSION;
+  health::toJson(doc["health"].to<JsonObject>());
   doc["callback_url"] = "http://" + WiFi.localIP().toString();
   JsonObject printer = doc["printer"].to<JsonObject>();
   printer["state"] = snap.printerState;
@@ -225,6 +227,10 @@ int request(const char* method, const char* path, const String* body, String* re
 LinkState state() {
   xSemaphoreTake(g_mu, portMAX_DELAY);
   LinkState st{g_ok, g_message, g_everOk ? static_cast<int32_t>((millis() - g_lastOkMs) / 1000) : -1};
+  if (st.ok && st.lastOkAgoS > 30) {
+    st.ok = false;
+    st.message = "heartbeat acknowledgement stale";
+  }
   xSemaphoreGive(g_mu);
   return st;
 }

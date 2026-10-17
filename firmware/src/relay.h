@@ -17,6 +17,11 @@ struct Snapshot {
   const char* printerState;  // "ready" | "busy"
   String activeJobId;        // Empty when idle.
   String lastJobSummary;     // Human-readable, for the device UI.
+  bool uartReady;
+  String activeState;
+  String lastJobId;
+  String lastJobState;
+  String lastJobError;
 };
 
 void begin();

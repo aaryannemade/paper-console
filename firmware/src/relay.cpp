@@ -65,6 +65,7 @@ TaskHandle_t g_writer = nullptr;
 char g_bootId[13] = {0};
 char g_deviceId[16] = {0};
 String g_lastSummary = "No jobs yet";
+String g_lastJobId, g_lastJobState, g_lastJobError;
 String g_pendingLog;
 
 HardwareSerial& g_uart = Serial1;
@@ -170,6 +171,9 @@ void finishLocked(Job& job, State state, const char* error) {
   job.state = state;
   strlcpy(job.error, error ? error : "", sizeof(job.error));
   job.finishedMs = millis();
+  g_lastJobId = job.id;
+  g_lastJobState = stateName(state);
+  g_lastJobError = job.error;
   if (&job == g_active) {
     dropQueueLocked();
   }
@@ -345,11 +349,16 @@ Snapshot snapshot() {
   Lock lock;
   Snapshot snap;
   bool busy = g_active && !isFinal(g_active->state);
-  snap.printerState = busy ? "busy" : "ready";
-  if (busy && !g_active->local) {
+  snap.uartReady = g_writer != nullptr && static_cast<bool>(g_uart);
+  snap.printerState = !snap.uartReady ? "error" : busy ? "busy" : "ready";
+  if (busy) {
     snap.activeJobId = g_active->id;
+    snap.activeState = stateName(g_active->state);
   }
   snap.lastJobSummary = g_lastSummary;
+  snap.lastJobId = g_lastJobId;
+  snap.lastJobState = g_lastJobState;
+  snap.lastJobError = g_lastJobError;
   return snap;
 }
 

@@ -119,6 +119,8 @@ class RelaySimulator:
         self.status_posts = []
         self.heartbeats_sent = 0
         self.last_heartbeat_error = None
+        self.started_at = time.monotonic()
+        self.last_heartbeat_ok = None
         # Channel display names (RAM only, like the firmware): refetched when
         # the heartbeat reply's channels_hash differs.
         self.channel_names = {}
@@ -161,6 +163,8 @@ class RelaySimulator:
         """Simulate a power cycle: new boot id, all job state lost."""
         with self.cond:
             self.boot_id = uuid.uuid4().hex[:12]
+            self.started_at = time.monotonic()
+            self.last_heartbeat_ok = None
             self.jobs.clear()
             self.active = None
             self.channel_names = {}
@@ -184,6 +188,30 @@ class RelaySimulator:
             timeout=5,
         )
 
+    def health(self):
+        with self.cond:
+            age = int(time.monotonic() - self.last_heartbeat_ok) if self.last_heartbeat_ok is not None else -1
+            connected = age >= 0 and age <= 30 and self.last_heartbeat_error is None
+            active = self.active if self.active and self.active.state not in FINAL else None
+            finished = [job for job in self.jobs.values() if job.state in FINAL]
+            last = max(finished, key=lambda job: job.finished or 0) if finished else None
+            uart = self.printer_state in ("ready", "busy")
+            status = ("error" if not uart else "disconnected" if not connected else
+                      "printing" if active else "error" if last and last.state == "failed" else "ready")
+            return {
+                "schema_version": 1, "device_id": self.device_id, "boot_id": self.boot_id,
+                "firmware": self.firmware, "uptime_s": int(time.monotonic() - self.started_at),
+                "status": status, "wifi_connected": True,
+                "server_state": "connected" if connected else "unknown" if age < 0 else "disconnected",
+                "server_detail": "connected" if connected else "heartbeat unavailable",
+                "server_last_ok_s": age, "uart_ready": uart, "physical_printer": "unknown",
+                "active_job_id": active.job_id if active else "",
+                "active_job_state": active.state if active else "",
+                "last_job_id": last.job_id if last else "",
+                "last_job_state": last.state if last else "",
+                "last_job_error": (last.error or "") if last else "",
+            }
+
     def send_heartbeat(self):
         with self.cond:
             active = self.active.job_id if self.active and self.active.state not in FINAL else None
@@ -203,11 +231,13 @@ class RelaySimulator:
                     "max_job_bytes": self.max_job_bytes,
                 },
                 "active_job_id": active,
+                "health": self.health(),
             }
         try:
             response = self._post("/api/device/heartbeat", payload)
             response.raise_for_status()
             self.heartbeats_sent += 1
+            self.last_heartbeat_ok = time.monotonic()
             self.last_heartbeat_error = None
             reply = response.json()
         except Exception as exc:
@@ -342,6 +372,8 @@ class RelaySimulator:
                 return False
 
             def do_GET(self):
+                if self.path == "/health":
+                    return self._send(200, sim.health())
                 if not self._authorized():
                     return
                 if self.path == "/status":

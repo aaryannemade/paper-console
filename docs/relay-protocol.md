@@ -354,3 +354,43 @@ These recipes share the development relay token `12345678901234567890` unless
 The simulator saves each receipt it receives, decoded from the raster bytes, as
 a PNG under `testing/artifacts/relay/`. Use `--baud 0` for instant printing, and
 `--port`/`--advertise-url` if the container cannot reach `127.0.0.1:8090`.
+## Firmware health and settings telemetry (schema 1)
+
+`GET /health` on the relay is public, returns HTTP 200 JSON with `Cache-Control:
+no-store`, and describes health rather than using HTTP status as readiness.
+It reads local snapshots only: no UART query, printer bytes, or network requests.
+The firmware HTTP task is separate from the UART writer; health does not wait
+for a receipt to finish. A currently uploading HTTP request can still delay
+another request on that HTTP server; validate latency on hardware.
+
+Fields: `schema_version: 1`, `device_id`, `boot_id`, `firmware`, `uptime_s`,
+`status` (`ready`, `printing`, `disconnected`, `error`, reserved `unknown`),
+`wifi_connected`, `server_state` (`connected`, `disconnected`, `unknown`),
+`server_detail`, `server_last_ok_s` (-1 means never), `uart_ready`,
+`physical_printer` (always `unknown`), `active_job_id`, `active_job_state`,
+`last_job_id`, `last_job_state`, `last_job_error`. Empty job strings mean none.
+Jobs include local test prints. Last outcome is RAM-only and clears on reboot.
+Uptime uses the 64-bit ESP timer rather than the wrapping Arduino millisecond counter.
+
+Summary priority: unavailable UART/writer → error; WiFi or server link down →
+disconnected; active job → printing; last job failed → error; otherwise ready.
+A previous failure remains visible until a subsequent job finishes or reboot.
+Link acknowledgement older than 30 s is disconnected even if the last attempt
+succeeded. A completed job means bytes left the UART, not that paper was printed.
+No validated physical status query or paper/busy signal is enabled.
+
+`/ui/status` includes this object as `health`. Authenticated device heartbeats
+also carry an optional `health` object. It samples link state **before** that
+heartbeat's acknowledgement, so initial/recovered connection may take one more
+heartbeat to show connected in server settings. Existing firmware without this
+field remains compatible. The simulator implements the same endpoint and data.
+
+`GET /api/printer/link` (admin-authenticated) exposes the reported `health` and
+`health_stale`: true for reports older than 20 s, missing heartbeats or an
+unreachable/offline link. Old firmware reports `health: null`. Server settings
+show uptime at report time, not an extrapolated live clock. Failed/timed-out UI
+polls mark retained data stale. The ESP32 page likewise marks itself unreachable
+on failed polls. Neither endpoint exposes credentials; job/input authentication
+is unchanged. Firmware health excludes SSID and server URL as well.
+
+Hardware validation is consolidated in [hardware-acceptance.md](hardware-acceptance.md).
