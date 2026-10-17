@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "channels.h"
 #include "relay.h"
 #include "settings.h"
 
@@ -74,11 +75,15 @@ uint32_t sendHeartbeat() {
   if (code == 200) {
     JsonDocument reply;
     uint32_t intervalS = 10;
+    String channelsHash;
     if (!deserializeJson(reply, response)) {
       intervalS = reply["heartbeat_interval_s"] | 10;
+      channelsHash = reply["channels_hash"] | "";
     }
     intervalS = constrain(intervalS, 2u, 30u);
     setState(true, "connected");
+    // Fetches the names only when the server's hash differs from ours.
+    channels::sync(channelsHash);
     return intervalS * 1000;
   }
   if (code == 401) {
@@ -169,6 +174,15 @@ bool linkOk() { return g_ok; }
 uint32_t linkGeneration() { return g_generation; }
 
 int postJson(const char* path, const String& body, String* response, uint16_t timeoutMs) {
+  return request("POST", path, &body, response, timeoutMs);
+}
+
+int getJson(const char* path, String* response, uint16_t timeoutMs) {
+  return request("GET", path, nullptr, response, timeoutMs);
+}
+
+int request(const char* method, const char* path, const String* body, String* response,
+            uint16_t timeoutMs) {
   const Settings& s = settings::current();
   if (s.server.isEmpty() || s.token.isEmpty()) {
     return HTTPC_ERROR_CONNECTION_REFUSED;
@@ -193,9 +207,14 @@ int postJson(const char* path, const String& body, String* response, uint16_t ti
   }
   http.setConnectTimeout(3000);
   http.setTimeout(timeoutMs);
-  http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + s.token);
-  int code = http.POST(body);
+  int code;
+  if (body) {
+    http.addHeader("Content-Type", "application/json");
+    code = http.sendRequest(method, *body);
+  } else {
+    code = http.sendRequest(method);
+  }
   if (response && code > 0) {
     *response = http.getString();
   }

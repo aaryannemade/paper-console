@@ -196,10 +196,7 @@ void checkResetButton() {
     if (!g_buttonDownMs) {
       g_buttonDownMs = millis();
     } else if (millis() - g_buttonDownMs > kResetHoldMs) {
-      Serial.println("[setup] BOOT held: erasing settings");
-      settings::erase();
-      delay(200);
-      ESP.restart();
+      factoryReset("BOOT held");
     }
   } else {
     g_buttonDownMs = 0;
@@ -316,5 +313,14 @@ String staIp() { return WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString(
 bool staConnected() { return WiFi.status() == WL_CONNECTED; }
 
 void scheduleRestart(uint32_t delayMs) { g_restartAtMs = millis() + delayMs; }
+
+void factoryReset(const char* reason) {
+  Serial.printf("[setup] %s: erasing settings and restarting into setup\n", reason);
+  settings::erase();
+  delay(200);
+  ESP.restart();
+  for (;;) {
+  }
+}
 
 }  // namespace netmgr

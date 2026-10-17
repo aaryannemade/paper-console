@@ -7,6 +7,8 @@ from WiFi association. Job status callbacks from the device wake the print
 output waiting for a job to finish. See docs/relay-protocol.md.
 """
 
+import hashlib
+import json
 import logging
 import os
 import threading
@@ -343,10 +345,45 @@ link = DeviceLink()
 router = APIRouter(tags=["device"])
 
 
+CHANNEL_POSITIONS = range(1, 9)
+
+
+def channel_names() -> list:
+    """Display names for positions 1-8 ("" = unnamed), from the live settings."""
+    import app.config as config
+
+    channels = config.settings.channels
+    return [
+        (channels[pos].name if pos in channels else "") for pos in CHANNEL_POSITIONS
+    ]
+
+
+def channel_names_hash(names: Optional[list] = None) -> str:
+    """Short content hash of the ordered name list; changes iff a name changes."""
+    names = channel_names() if names is None else names
+    encoded = json.dumps(names, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
 @router.post("/api/device/heartbeat", dependencies=[Depends(require_relay_token)])
 def post_heartbeat(heartbeat: Heartbeat):
     """Device identity, callback URL, printer state and limits; send every interval."""
-    return link.record_heartbeat(heartbeat)
+    reply = link.record_heartbeat(heartbeat)
+    # The device fetches /api/device/channels when this differs from its copy.
+    reply["channels_hash"] = channel_names_hash()
+    return reply
+
+
+@router.get("/api/device/channels", dependencies=[Depends(require_relay_token)])
+def get_device_channels():
+    """Channel display names for the device; `hash` matches the heartbeat's."""
+    names = channel_names()
+    return {
+        "hash": channel_names_hash(names),
+        "channels": [
+            {"position": pos, "name": name} for pos, name in zip(CHANNEL_POSITIONS, names)
+        ],
+    }
 
 
 @router.post(

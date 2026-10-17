@@ -4,7 +4,7 @@ Status: Steps 1–5 (container side) and the core Step 6 firmware are implemente
 WiFi printing, physical encoder/button input and corrected raster geometry have
 been verified on the XIAO ESP32S3. Step 6 hardware acceptance is still partial;
 Steps 7–10 add channel indication, browser flashing, device health visibility and
-a 10-second encoder-button reboot. Step 11 closes out hardware/container validation.
+an encoder reset sequence. Step 11 closes out hardware/container validation.
 Printer UART details are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
@@ -65,10 +65,10 @@ traffic does not deadlock while the container is pushing a receipt.
 | --- | --- | --- |
 | Container packaging | `Dockerfile`, `docker-compose.yaml`, `portainer-compose.yaml`, `app/paths.py` | Multi-stage image, mounted data directory, non-root runtime and health check (Step 4 complete). |
 | ESP32 core (Step 6) | `firmware/`, [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implemented; physical prints/input verified. Failure/recovery, cancellation and scheduling acceptance still pending. |
-| Channel indication (Step 7) | Encoder firmware, prospective display hardware, container channel metadata | Choose an indication method; OLED is a candidate, not yet selected. |
+| Channel indication (Step 7) | Encoder firmware, prospective display hardware, container channel metadata | Channel names done end to end (UI, hash-triggered fetch to the device). Choose the display (OLED candidate) and render. |
 | Browser flashing (Step 8) | Firmware release CI, GitHub Pages installer | Build/publish board-specific binaries and a Web Serial flashing page. |
-| Device health (Step 9) | Firmware HTTP API/UI, container link UI | Add firmware health endpoint and an at-a-glance printer/link indicator. |
-| Hardware reboot gesture (Step 10) | Encoder button firmware and gesture protocol/docs | Hold encoder button 10 s to reboot the ESP32 without erasing settings. |
+| Device health (Step 9) | Firmware HTTP API/UI, container link UI | Settings UI status dot done. Add firmware health endpoint and device-page summary. |
+| Encoder reset sequence (Step 10) | `firmware/src/inputs.cpp`, `hold_cancel` gesture | Implemented (hold 10 s, clockwise, anticlockwise, click = erase settings); hardware test pending. |
 | Final acceptance (Step 11) | Real ESP32/printer, container deployment, protocol checks | Validate failure/recovery, scheduling, menus, flashing and all new device features. |
 
 ## Step 1 — Remove WiFi provisioning end to end
@@ -217,8 +217,8 @@ Implemented:
 - DFRobot SEN0235 EC11 module: VCC=3V3, A=D0/GPIO1, B=D1/GPIO2,
   C=D3/GPIO4. Physical tests confirmed active-low button and four quadrature
   transitions per detent. Clockwise increments; one detent selects one position,
-  wrapping 1–8. Position persists after the knob rests and is resynchronized
-  when the server link recovers. This is incremental selection, not an absolute
+  wrapping 1–8. The position starts at 1 on every boot (no longer saved in
+  NVS) and is resynchronized whenever the server link comes up. This is incremental selection, not an absolute
   shaft angle; a fixed printed pointer legend is deferred in favour of Step 7.
 - Debounced `press`, 5-second `hold`, and `hold_release` events carry position,
   unique event IDs and shared per-press IDs. A dedicated sender orders events,
@@ -259,12 +259,15 @@ as hardware acceptance. Quick Actions UX clarification is also deferred there.
   D4/GPIO5 and D5/GPIO6 remain available as candidate I²C SDA/SCL pins.
 - Show position 1–8, and preferably the server-configured channel name. Define
   a minimal server→device metadata/status contract rather than duplicating the
-  channel configuration or menu logic in firmware. **Done (server side):**
-  channels have an optional `name` (single line, ≤24 characters, empty =
-  unnamed) edited inline in the settings UI, stored in `config.json`, set via
-  `PUT /api/channels/{position}/name` and printed on the channel list. Still to
-  do: deliver names to the device (e.g. in the heartbeat response, with a
-  version so the device refetches only on change) and render them.
+  channel configuration or menu logic in firmware. **Done:** channels have an
+  optional `name` (single line, ≤24 characters, empty = unnamed) edited inline
+  in the settings UI, stored in `config.json`, set via
+  `PUT /api/channels/{position}/name` and printed on the channel list. Each
+  heartbeat reply carries `channels_hash` (hash of the eight names, not a
+  growing version); when it differs from the device's copy the firmware
+  fetches `GET /api/device/channels` (relay token) and keeps the names in RAM,
+  refetching after every boot. The device status page shows the selected
+  channel and name. Still to do: render them on the chosen display.
 - Keep the position display responsive during printing; define disconnected
   and reconnect states and how selection menus differ from ordinary channels.
 - Keep physical position and the displayed selection synchronized after boot,
@@ -327,28 +330,33 @@ recovery; the endpoint remains responsive during a long receipt. Any claim of
 physical printer availability is backed by a tested signal, otherwise labeled
 unknown rather than inferred.
 
-## Step 10 — Encoder-button 10-second hardware reboot (planned)
+## Step 10 — Encoder reset sequence (implemented; hardware test pending)
 
-- Holding the **encoder push button** for 10 seconds reboots the ESP32 locally,
-  preserving NVS WiFi/server/token and saved channel position. This is a device
-  reboot, not a reset of container settings or a host reboot. Settings erasure
-  remains the separate existing BOOT-button action.
-- Integrate with the current gestures: a 5-second hold may already trigger a
-  tactile feed or print cancellation. At 10 seconds consume the press locally,
-  show/log reboot feedback, and suppress the corresponding `hold_release` so it
-  cannot open Quick Actions or print after the reboot.
-- Do not blindly reboot inside a bitmap definition. Request cancellation and
-  coordinate the reboot at a complete UART-record boundary with a bounded wait;
-  on an unrecoverable stall, report/record what is possible and never replay the
-  uncertain receipt after boot. Account for the new boot ID and link recovery.
-- If the button remains held across reboot, wait for release before rearming it;
-  prevent reboot loops and accidental startup presses. Update protocol and UI
-  instructions if the gesture contract needs additional state.
+Revised from a plain 10-second reboot: the encoder performs the same **settings
+erase** as holding BOOT 5 s, behind a deliberate sequence so it cannot happen
+by accident.
 
-Acceptance: short press and 5-second Quick Actions/cancel continue working;
-10 seconds causes exactly one ESP32 reboot and no Quick Actions on release.
-Settings survive, an active print stops at a safe boundary when possible, and
-the relay rejoins and resynchronizes position without replaying a print.
+- Hold the encoder button 10 s → turn one detent clockwise → one anticlockwise
+  → click (press under 2 s). Both triggers call `netmgr::factoryReset()`: erase
+  NVS (WiFi, server URL, token), restart into the setup network.
+- At 5 s the normal `hold` is still sent (tactile cue, or cancelling a running
+  print). At 10 s the device sends the new **`hold_cancel`** gesture: the server
+  releases the hold reservation immediately (prints are not blocked for its
+  20 s timeout) and ignores any `hold_release` of that press. No Quick Actions.
+- While the sequence is active, turns and presses stay local: no position
+  change, no events. A wrong-direction turn, a press before both turns, a long
+  final press, or 10 s without the next step (counted after release) cancels it.
+- Feedback: XIAO user LED (GPIO21) lit while active, blinking per accepted step;
+  `[input] reset sequence: ...` log lines; `reset_sequence` in `/ui/inputs`.
+- Because the 5 s hold already requests cancellation, a running print has
+  normally stopped at a band boundary long before the sequence completes.
+- The channel position is no longer saved: every boot starts at 1 and sends it
+  when the link comes up, so a reset or power loss also returns to channel 1.
+
+Acceptance: short press, 5 s Quick Actions and hold-to-cancel still work;
+holding 10 s alone and releasing prints nothing and opens no menu; the full
+sequence erases settings and opens the setup network; each cancel path leaves
+settings intact and the knob working normally.
 
 ## Step 11 — Hardware acceptance and migration closeout (pending)
 
@@ -367,7 +375,7 @@ the relay rejoins and resynchronizes position without replaying a print.
   Verify scheduled, physical-button and web-UI prints, container recreation with
   persisted settings/password/saves, and relay recovery after recreation.
 - Validate the channel indicator, public browser-flashing flow, health UI and
-  10-second reboot on hardware, including first-time onboarding and updates.
+  encoder reset sequence on hardware, including first-time onboarding and updates.
 - Reconcile README, protocol, UART reference and troubleshooting with the final
   behaviour; record accepted limits (9600-baud throughput, dithering seams,
   band-boundary cancellation latency and any unverified physical printer state).

@@ -5,6 +5,7 @@
 // Setup: join the "PaperConsole-XXXXXX" WiFi network and fill in the page.
 #include <Arduino.h>
 
+#include "channels.h"
 #include "events.h"
 #include "inputs.h"
 #include "netmgr.h"
@@ -28,6 +29,7 @@ void setup() {
                 PC1_FIRMWARE_VERSION, relay::deviceId(), relay::bootId(),
                 static_cast<unsigned>(ESP.getPsramSize() / 1024), static_cast<int>(esp_reset_reason()));
 
+  channels::begin();
   events::begin();
   inputs::begin();
   netmgr::begin();

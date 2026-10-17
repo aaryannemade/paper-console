@@ -4,8 +4,10 @@ The ESP32 turns its controls into two kinds of events (see docs/relay-protocol.m
 
 * ``position`` — the selected channel position, 1-8 (absolute).
 * ``button`` — a gesture: ``press`` (released before 5 s), ``hold`` (5 s reached,
-  still held), or ``hold_release`` (released after a hold). Gestures of one
-  physical press share a ``press_id``.
+  still held), ``hold_release`` (released after a hold), or ``hold_cancel`` (the
+  device took the held press for a local action, e.g. its reset sequence: drop
+  the armed hold, never send ``hold_release``). Gestures of one physical press
+  share a ``press_id``.
 
 How the physical control produces these (e.g. a rotary encoder with a push switch)
 is firmware logic. What a gesture *means* — print the channel, choose in a menu,
@@ -30,7 +32,8 @@ logger = logging.getLogger(__name__)
 MIN_POSITION = 1
 MAX_POSITION = 8
 
-Gesture = Literal["press", "hold", "hold_release"]
+Gesture = Literal["press", "hold", "hold_release", "hold_cancel"]
+# Handlers required by configure(); hold_cancel's handler is optional.
 GESTURES = ("press", "hold", "hold_release")
 
 
@@ -151,9 +154,16 @@ class InputProcessor:
             return "position_set"
 
         if event.gesture == "hold_release" and event.press_id in self._consumed_presses:
-            # This press already cancelled a print; its release must not open
-            # Quick Actions.
+            # This press already cancelled a print (or was taken by the device);
+            # its release must not open Quick Actions.
             return "ignored_consumed"
+
+        if event.gesture == "hold_cancel":
+            if event.press_id not in self._consumed_presses:
+                self._consumed_presses.append(event.press_id)
+            handler = self._handlers.get("hold_cancel")
+            if handler is None:
+                return "hold_cancelled"
 
         handler = self._handlers.get(event.gesture)
         if handler is None:

@@ -195,6 +195,26 @@ def test_hold_that_cancels_consumes_the_rest_of_the_press(processor):
     assert [c[0] for c in processor.calls] == ["hold", "hold_release"]
 
 
+def test_hold_cancel_consumes_the_press_without_quick_actions(processor):
+    assert processor.process(_button("hold", press_id=7))["result"] == "hold_ready"
+    # No handler configured: still consumed.
+    assert processor.process(_button("hold_cancel", press_id=7))["result"] == "hold_cancelled"
+    assert processor.process(_button("hold_release", press_id=7))["result"] == "ignored_consumed"
+    assert [c[0] for c in processor.calls] == ["hold"]
+
+
+def test_hold_cancel_releases_reservation_but_not_a_print(monkeypatch, idle):
+    assert main.handle_button_hold() == "hold_ready"
+    assert hardware.hold_action_in_progress is True
+    assert main.handle_button_hold_cancel() == "hold_cancelled"
+    assert hardware.hold_action_in_progress is False
+    assert hardware.try_begin_print_job() is True  # printer free immediately
+
+    # During a print, hold_cancel leaves the print reservation alone.
+    assert main.handle_button_hold_cancel() == "hold_cancelled"
+    assert hardware.print_in_progress is True
+
+
 def test_handler_failure_is_reported_not_raised(processor):
     def boom():
         raise RuntimeError("boom")

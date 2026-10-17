@@ -600,6 +600,12 @@ def _begin_hold_action() -> Optional[str]:
     return None
 
 
+def handle_button_hold_cancel() -> str:
+    """The device kept a held press for itself: release the armed hold, no menu."""
+    hardware.release_hold_action()
+    return "hold_cancelled"
+
+
 def handle_button_hold_release() -> str:
     """Released after a hold: print the Quick Actions menu."""
     failure = _begin_hold_action()
@@ -819,6 +825,7 @@ async def lifespan(app: FastAPI):
         press=lambda: handle_button_press(),
         hold=lambda: handle_button_hold(),
         hold_release=lambda: handle_button_hold_release(),
+        hold_cancel=lambda: handle_button_hold_cancel(),
     )
 
     yield

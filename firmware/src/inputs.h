@@ -1,9 +1,16 @@
 // Physical controls: EC11 rotary encoder (A/B) with push button (C).
 //
 // The knob selects the channel position 1-8: one detent per step, clockwise
-// increases, wrapping 8 -> 1 and 1 -> 8. The position is kept in NVS so it
-// survives restarts. The button reports gestures as in docs/relay-protocol.md:
-// press (released before 5 s), hold (5 s reached), hold_release.
+// increases, wrapping 8 -> 1 and 1 -> 8. The position starts at 1 on every
+// boot (not saved) and is sent to the server whenever the link comes up. The
+// button reports gestures as in docs/relay-protocol.md: press (released
+// before 5 s), hold (5 s reached), hold_release.
+//
+// Reset sequence (same effect as holding BOOT 5 s: erase settings, reopen
+// setup): hold the button 10 s (the user LED lights; the server is sent
+// hold_cancel so the release opens no menu), then turn one detent clockwise,
+// one anticlockwise, and click (press < 2 s). A wrong turn, an early press or
+// 10 s without the next step cancels it; those inputs are not sent.
 //
 // Measured on the DFRobot SEN0235 module: A, B and C idle high (module
 // pull-ups), the button pulls C low, and one detent is a full quadrature cycle

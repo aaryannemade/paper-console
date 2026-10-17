@@ -314,6 +314,24 @@ def test_receipt_round_trip_is_byte_exact(make_sim, output):
     assert relay_link.link.snapshot()["last_job"]["state"] == "completed"
 
 
+def test_device_refetches_channel_names_only_when_hash_changes(make_sim, monkeypatch):
+    import app.config as config
+
+    settings = config.Settings()
+    monkeypatch.setattr(config, "settings", settings)
+    sim = make_sim()
+    assert sim.wait_for(lambda: sim.channel_fetches == 1)
+    first_hash = sim.channels_hash
+    sim.send_heartbeat()
+    sim.send_heartbeat()
+    assert sim.channel_fetches == 1  # unchanged names: no refetch
+
+    settings.channels[2].name = "Work update"
+    sim.send_heartbeat()
+    assert sim.channel_fetches == 2
+    assert sim.channel_names[2] == "Work update" and sim.channels_hash != first_hash
+
+
 def test_raster_printer_renders_through_relay(make_sim, output):
     sim = make_sim()
     printer = RasterPrinter(output=output)

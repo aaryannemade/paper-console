@@ -57,6 +57,7 @@ h+=row('Server',s.server?esc(s.server):'not set',s.server?'':'bad');
 h+=row('Link',esc(s.link.message)+(s.link.last_ok_s>=0&&!s.link.ok?' (last ok '+s.link.last_ok_s+' s ago)':''),s.link.ok?'ok':'bad');
 h+=row('Printer',esc(s.printer.state)+(s.printer.active_job?' &middot; job '+esc(s.printer.active_job.slice(0,8)):''));
 h+=row('Last job',esc(s.printer.last_job));
+h+=row('Channel',s.channel.position+(s.channel.name?' &middot; '+esc(s.channel.name):''));
 $('st').innerHTML=h;
 if(!filled){filled=true;$('ssid').value=s.ssid||'';$('server').value=s.server||'';
 if(s.token_set)$('tokhint').textContent='A token is saved. Leave blank to keep it, or enter a new one (same value as PC1_RELAY_TOKEN on the server).';

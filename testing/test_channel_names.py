@@ -95,6 +95,37 @@ def test_rename_route_requires_admin():
     assert main.require_admin_access in deps
 
 
+def test_device_channels_hash_tracks_name_changes(isolated_settings, monkeypatch):
+    import app.relay_link as relay_link
+
+    monkeypatch.setattr(config, "settings", main.settings)
+    first = relay_link.channel_names_hash()
+    body = relay_link.get_device_channels()
+    assert body["hash"] == first
+    assert [c["position"] for c in body["channels"]] == list(range(1, 9))
+
+    main.settings.channels[3].name = "Work update"
+    second = relay_link.channel_names_hash()
+    assert second != first and len(second) == 16
+    assert relay_link.get_device_channels()["channels"][2] == {"position": 3, "name": "Work update"}
+    # Module/schedule changes do not affect the hash; only names do.
+    main.settings.channels[3].schedule_rules = []
+    main.settings.channels[3].modules = []
+    assert relay_link.channel_names_hash() == second
+    # A missing channel counts as unnamed.
+    main.settings.channels.pop(8, None)
+    assert relay_link.channel_names()[7] == ""
+
+
+def test_device_channel_routes_use_relay_token():
+    import app.relay_auth as relay_auth
+
+    routes = {getattr(r, "path", ""): r for r in main.app.routes}
+    for path in ("/api/device/channels", "/api/device/heartbeat"):
+        deps = [d.call for d in routes[path].dependant.dependencies]
+        assert relay_auth.require_relay_token in deps
+
+
 def test_channel_overview_shows_names(isolated_settings, monkeypatch):
     lines = []
 

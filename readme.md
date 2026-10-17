@@ -520,9 +520,19 @@ from **3V3** (not 5V: its pull-ups go to VCC):
 | A / B | D0 (GPIO1) / D1 (GPIO2) |
 | C (button, low when pressed) | D3 (GPIO4) |
 
-One detent is one channel step (clockwise up, wrapping 8 → 1); the position
-is saved across restarts and re-sent whenever the link to the server comes
-up. The button reports `press`, `hold` (5 s) and `hold_release`. Events go to
+One detent is one channel step (clockwise up, wrapping 8 → 1). The position
+starts at **1 on every boot** (it is not saved) and is sent whenever the link to
+the server comes up. The button reports `press`, `hold` (5 s) and
+`hold_release`. The relay fetches channel names from the server whenever they
+change (a hash in each heartbeat reply) and shows the selected channel and its
+name on its status page; they are kept for a future display.
+
+**Encoder reset sequence** (same as holding BOOT 5 s: erases WiFi/server/token
+and reopens setup): hold the knob button **10 s** until the XIAO's user LED
+(next to the USB-C connector) lights, release, turn **one detent clockwise**, then **one anticlockwise**
+(the LED blinks for each accepted step), then **click**. A wrong turn, an early
+press or 10 s without the next step cancels it (LED off). None of these inputs
+change the channel or print; at 5 s the usual paper-feed cue still appears. Events go to
 `POST /api/device/events` one at a time, retried with the same `event_id`, and
 dropped after 5 s rather than replayed late. `just fw-monitor` shows each
 input (`[input] ...`) and the server's answer (`[event] ... -> printing_channel`);
@@ -540,7 +550,8 @@ page is at `http://paper-console.local/` (mDNS; one relay per network) or
 server). The page has no login: anyone on the network can change the relay's
 settings. The relay token only authenticates requests between the server and
 the relay; the page accepts a new one but never shows it. Holding **BOOT** for 5 s
-erases the settings and reopens the setup network. If the network is
+(or the encoder reset sequence above) erases the settings and reopens the
+setup network. If the network is
 unavailable for 30 s, the setup network comes up again until it reconnects.
 
 The relay sends heartbeats to the server, accepts pushed jobs and writes the

@@ -154,6 +154,18 @@ def promote_hold_to_print_job() -> bool:
         return True
 
 
+def release_hold_action() -> bool:
+    """Drop an armed hold reservation without printing; leaves prints alone."""
+    global hold_action_in_progress, hold_action_started_at
+
+    with print_lock:
+        if not hold_action_in_progress:
+            return False
+        hold_action_in_progress = False
+        hold_action_started_at = 0.0
+        return True
+
+
 def clear_print_reservation(*, clear_hold: bool = True):
     """Release active print/hold reservations."""
     global print_in_progress, hold_action_in_progress, hold_action_started_at, last_print_time

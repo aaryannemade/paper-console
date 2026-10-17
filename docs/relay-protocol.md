@@ -56,6 +56,7 @@ raw edges. All gestures of one physical press carry the same `press_id`.
 | `press` | Released before 5 s. |
 | `hold` | 5 s reached while still held (send once, immediately). |
 | `hold_release` | Released after `hold`, regardless of how long it remains held. |
+| `hold_cancel` | The device kept a held press for a local action (the reference firmware's reset sequence, at 10 s). Sent instead of `hold_release`; never followed by one. |
 
 ```json
 {"event_id": "a3f9c2-42", "type": "button", "gesture": "press", "press_id": "a3f9c2-17", "position": 5}
@@ -86,6 +87,7 @@ Unknown fields are ignored. Malformed events get `422`.
 | `hold` | A print is running | `cancel_requested` — the print stops at the next bitmap-band boundary (up to about 3.2 s at 9600 baud). The rest of this press is ignored. |
 | `hold` | Idle | `hold_ready` — a short paper feed tells the user they can release |
 | `hold_release` | After `hold_ready` | `quick_actions` — prints the Quick Actions menu |
+| `hold_cancel` | Any | `hold_cancelled` — releases the printer reservation armed by `hold` (a running print is unaffected) and ignores any later `hold_release` of this press |
 
 Other results, all with HTTP `200`:
 
@@ -94,7 +96,7 @@ Other results, all with HTTP `200`:
 | `position_set` | Position stored. |
 | `busy` | Another job holds the printer, or a press arrived within 3 s of the last print. Nothing happens; the event is not queued. |
 | `printer_unavailable` | The print output cannot accept a receipt. Nothing happens. |
-| `ignored_consumed` | `hold_release` for a press that already cancelled a print. |
+| `ignored_consumed` | `hold_release` for a press that already cancelled a print or was `hold_cancel`led. |
 | `not_ready` | The server is still starting. |
 | `error` | The gesture failed on the server (logged). |
 
@@ -131,7 +133,20 @@ just device position 5
 just device press
 just device quick-actions    # hold, then hold_release
 just device hold             # during a print: cancel
+just device hold-cancel      # hold, then hold_cancel (no Quick Actions)
 ```
+
+### Reference firmware controls
+
+The XIAO firmware starts at position 1 on every boot (the position is not
+saved) and sends it whenever the link to the container comes up. Holding the
+button 10 s, then turning one detent clockwise, one anticlockwise and clicking
+(press under 2 s) erases the device settings and reopens setup, like holding
+BOOT 5 s. The 5 s `hold` is still sent on the way; at 10 s the device sends
+`hold_cancel` and keeps the rest of the sequence local (no position or button
+events). The user LED (GPIO21) is lit while the sequence is active and blinks
+on each accepted step; a wrong turn, an early press or 10 s without the next
+step cancels it.
 
 ## Heartbeat (device → container)
 
@@ -164,12 +179,37 @@ Authorization: Bearer <token>
 | `limits.max_job_bytes` | 1 KiB–64 MiB: larger jobs are refused by the container. |
 | `active_job_id` | Job the device is currently processing, if any. |
 
-Response: `{"heartbeat_interval_s": 10, "heartbeat_timeout_s": 30}`. Send a
+Response: `{"heartbeat_interval_s": 10, "heartbeat_timeout_s": 30,
+"channels_hash": "3f1c9a0b7d2e4c61"}`. Send a
 heartbeat at that interval, and immediately after boot, after reconnecting WiFi
 and whenever `printer.state` changes. The container considers the device offline
 after `heartbeat_timeout_s` without one, or as soon as a push to `callback_url`
 fails; the next heartbeat brings it back. This is the link status shown in the
 settings UI.
+
+## Channel names (device ← container)
+
+Channels can have a display name (set in the settings UI; up to 24 characters,
+single line, `""` = unnamed). `channels_hash` in the heartbeat response is a
+16-hex-character hash of the ordered list of the eight names: it changes if and
+only if a name changes (modules and schedules do not affect it). When it
+differs from the hash of the copy the device holds (or the device has none,
+e.g. after boot), fetch the names:
+
+```
+GET /api/device/channels
+Authorization: Bearer <token>
+```
+
+```json
+{"hash": "3f1c9a0b7d2e4c61",
+ "channels": [{"position": 1, "name": ""}, {"position": 2, "name": "Work update"}, ...]}
+```
+
+Store the names together with this `hash` (not the heartbeat's: a name may
+change between the two requests, and the next heartbeat then fetches again).
+On a failed fetch keep the old copy and retry on the next heartbeat. Names are
+UTF-8. A container without this feature omits `channels_hash`; keep no names.
 
 ## Print jobs (container → device)
 

@@ -32,5 +32,10 @@ uint32_t linkGeneration();
 // POSTs JSON to the configured server with the bearer token. Returns the HTTP
 // status, or a negative HTTPClient error code. Safe to call from any task.
 int postJson(const char* path, const String& body, String* response, uint16_t timeoutMs = 5000);
+// Same for a GET without a body.
+int getJson(const char* path, String* response, uint16_t timeoutMs = 5000);
+// Shared implementation; body == nullptr sends no body.
+int request(const char* method, const char* path, const String* body, String* response,
+            uint16_t timeoutMs);
 
 }  // namespace uplink

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "channels.h"
 #include "inputs.h"
 #include "netmgr.h"
 #include "portal_html.h"
@@ -172,6 +173,10 @@ esp_err_t handleStatus(httpd_req_t* req) {
   doc["printer"]["state"] = snap.printerState;
   doc["printer"]["active_job"] = snap.activeJobId;
   doc["printer"]["last_job"] = snap.lastJobSummary;
+  int position = inputs::currentPosition();
+  doc["channel"]["position"] = position;
+  doc["channel"]["name"] = channels::name(position);
+  channels::toJson(doc["channels"].to<JsonObject>());
   doc["uptime_s"] = millis() / 1000;
   String body;
   serializeJson(doc, body);

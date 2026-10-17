@@ -4,7 +4,7 @@
 // name pointing at the setup page. Configured: joins the network and answers
 // at http://paper-console.local/; if it cannot connect for 30 s the setup AP
 // comes up as well (and STA retries pause while someone is connected to it).
-// Holding BOOT for 5 s erases all settings.
+// Holding BOOT for 5 s (or the encoder reset sequence) erases all settings.
 //
 // WiFi scans: the single radio leaves the AP channel while scanning, which
 // drops setup clients. So networks are scanned before the AP starts and
@@ -29,5 +29,8 @@ String apIp();
 String staIp();
 bool staConnected();
 void scheduleRestart(uint32_t delayMs);
+// Erases all saved settings (WiFi, server, token) and restarts into setup.
+// Used by BOOT held 5 s and by the encoder reset sequence (inputs.cpp).
+[[noreturn]] void factoryReset(const char* reason);
 
 }  // namespace netmgr

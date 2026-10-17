@@ -119,6 +119,11 @@ class RelaySimulator:
         self.status_posts = []
         self.heartbeats_sent = 0
         self.last_heartbeat_error = None
+        # Channel display names (RAM only, like the firmware): refetched when
+        # the heartbeat reply's channels_hash differs.
+        self.channel_names = {}
+        self.channels_hash = None
+        self.channel_fetches = 0
         self._stop = threading.Event()
         self._threads = []
         self._session = requests.Session()
@@ -158,6 +163,8 @@ class RelaySimulator:
             self.boot_id = uuid.uuid4().hex[:12]
             self.jobs.clear()
             self.active = None
+            self.channel_names = {}
+            self.channels_hash = None
             self.cond.notify_all()
         self.send_heartbeat()
 
@@ -202,10 +209,31 @@ class RelaySimulator:
             response.raise_for_status()
             self.heartbeats_sent += 1
             self.last_heartbeat_error = None
-            return response.json()
+            reply = response.json()
         except Exception as exc:
             self.last_heartbeat_error = str(exc)
             return None
+        self._sync_channel_names(reply.get("channels_hash"))
+        return reply
+
+    def _sync_channel_names(self, server_hash):
+        """Fetch names only when the heartbeat's hash differs from our copy."""
+        if not server_hash or server_hash == self.channels_hash:
+            return
+        try:
+            response = self._session.get(
+                f"{self.server_url}/api/device/channels",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=5,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except Exception as exc:
+            self.last_heartbeat_error = f"channel names: {exc}"
+            return  # Retried on the next heartbeat.
+        self.channel_names = {c["position"]: c["name"] for c in body["channels"]}
+        self.channels_hash = body["hash"]
+        self.channel_fetches += 1
 
     def _heartbeat_loop(self):
         while not self._stop.is_set():
@@ -465,8 +493,13 @@ def main():
     print(f"[SIM] listening on {sim.url}, reporting to {sim.server_url}, baud {args.baud or 'instant'}", flush=True)
     try:
         last_error = None
+        last_fetches = 0
         while True:
             time.sleep(1)
+            if sim.channel_fetches != last_fetches:
+                last_fetches = sim.channel_fetches
+                names = ", ".join(f"{p}={n!r}" for p, n in sorted(sim.channel_names.items()) if n)
+                print(f"[SIM] channel names {sim.channels_hash}: {names or '(none)'}", flush=True)
             if sim.last_heartbeat_error != last_error:
                 last_error = sim.last_heartbeat_error
                 print(f"[SIM] heartbeat {'failing: ' + last_error if last_error else 'ok'}", flush=True)

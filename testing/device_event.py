@@ -9,6 +9,7 @@ shared token from PC1_RELAY_TOKEN.
   python testing/device_event.py hold              # 5 s reached: cancel print or arm menu
   python testing/device_event.py quick-actions     # hold, then release (opens Quick Actions)
   python testing/device_event.py cancel            # hold during a print (same as 'hold')
+  python testing/device_event.py hold-cancel       # hold, then the device keeps the press
 
 Options: --url (default http://127.0.0.1:8000), --token (default $PC1_RELAY_TOKEN).
 """
@@ -51,7 +52,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "action",
-        choices=["position", "press", "hold", "cancel", "quick-actions"],
+        choices=["position", "press", "hold", "cancel", "quick-actions", "hold-cancel"],
     )
     parser.add_argument("value", nargs="?", type=int, help="position for 'position'")
     parser.add_argument("--position", type=int, help="position to report with a button event")
@@ -88,6 +89,10 @@ def main():
         if button("hold")["result"] == "hold_ready":
             time.sleep(0.2)
             button("hold_release")
+    elif args.action == "hold-cancel":
+        # Device kept the press (reset sequence): no Quick Actions afterwards.
+        button("hold")
+        button("hold_cancel")
 
 
 if __name__ == "__main__":
