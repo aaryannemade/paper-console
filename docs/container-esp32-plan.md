@@ -289,7 +289,17 @@ Acceptance: a fresh board can be flashed from the published Pages site, complete
 captive setup and print a receipt; an update preserves settings as documented.
 The published manifest/binaries correspond to the displayed firmware version.
 
-## Step 9 — Firmware health endpoint and at-a-glance status (planned)
+## Step 9 — Firmware health endpoint and at-a-glance status (server dot implemented)
+
+Implemented: the settings top bar shows a green/amber/red dot from
+`GET /api/printer/link` (`indicator.level` and a one-line `indicator.label`),
+polled every 5 s after login. Green: ESP32 heartbeat current and relay ready
+(or USB output available). Amber: printing, heartbeat later than two intervals,
+or development `console` output. Red: no/expired heartbeat, unreachable relay,
+non-printable reported printer state, unavailable USB output or the status
+request failing. It is deliberately visual only; troubleshooting stays with the
+container logs, ESP32 web UI and serial monitor. Green does not prove paper.
+Remaining below: the firmware-side health endpoint and device-page summary.
 
 - Add a lightweight firmware **`GET /health`** endpoint with a versioned JSON
   shape: firmware version/uptime, WiFi connectivity, server-link status, UART

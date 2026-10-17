@@ -541,6 +541,12 @@ just device position 3 && just device press      # print channel 3 via the relay
 ## 6. Troubleshooting
 
 ### Printer Issues
+* **Status dot:** The circle beside the settings title is green when the ESP32 is
+  online and ready, amber while printing, when heartbeats are late or with
+  development `console` output, and red when the relay or printer output is
+  unavailable. Hover/tap it for a one-line reason. Green means the relay accepts
+  jobs; it does not prove paper is loaded. For details use the backend log,
+  the ESP32 page (`http://paper-console.local/`) or `just fw-monitor`.
 * **Relay offline:** Check `GET /api/printer/link` or Printer Connection in General
   Settings. Start `just relay-sim` to exercise the HTTP relay without firmware.
 * **USB printer not found:** For native USB, check `lsusb`, device permissions

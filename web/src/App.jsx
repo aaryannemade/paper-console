@@ -11,6 +11,8 @@ import useTheme from './hooks/useTheme';
 import GitHubIcon from './assets/GitHubIcon';
 import BorderWidthIcon from './assets/BorderWidthIcon';
 import PreferencesIcon from './assets/PreferencesIcon';
+import PrinterStatusDot from './components/PrinterStatusDot';
+import { usePrinterLink } from './hooks/usePrinterLink';
 import {
   adminAuthFetch,
   fetchAdminAuthStatus,
@@ -47,6 +49,8 @@ function App() {
   const [authInfo, setAuthInfo] = useState(null);
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const isUnlocked = !loading && !(authInfo?.login_required && !authInfo?.authenticated);
+  const printerLink = usePrinterLink(isUnlocked);
 
   // Debounce timers for module updates
   // Debounce timer for location search (respects Nominatim 1 req/sec limit)
@@ -727,10 +731,11 @@ function App() {
     <div
       className='max-w-[480px] w-full mx-auto px-2 pt-4 pb-12 sm:px-6 sm:pt-8 sm:pb-16 min-h-screen'
       style={{ backgroundColor: 'var(--color-bg-base)', color: 'var(--color-text-main)' }}>
-      <div className='mb-8 pt-4 pb-2'>
+      <div className='mb-8 pt-4 pb-2 flex items-center justify-between gap-4'>
         <h1 className='text-3xl sm:text-4xl leading-none font-bold tracking-tighter' style={{ color: 'var(--color-text-main)' }}>
           PC-1 SETTINGS
         </h1>
+        <PrinterStatusDot link={printerLink} />
       </div>
 
       {/* Tabs */}
@@ -807,6 +812,7 @@ function App() {
               settings={settings}
               saveGlobalSettings={saveGlobalSettings}
               onConfigImported={applyImportedConfig}
+              printerLink={printerLink}
             />
             <div className='mt-8'>
               {/* GitHub Link */}

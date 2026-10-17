@@ -115,6 +115,48 @@ def test_link_availability_follows_heartbeats(token_env):
     assert link.availability()[0] is True
 
 
+def test_status_indicator_levels(token_env):
+    now = [100.0]
+    link = DeviceLink(clock=lambda: now[0])
+
+    def level(mode="esp32", available=True):
+        return relay_link.status_indicator(link.snapshot(), mode, available)["level"]
+
+    assert level() == "red"  # never seen
+    link.record_heartbeat(_heartbeat())
+    assert level() == "green"
+
+    now[0] += relay_link.LATE_HEARTBEAT_SECONDS + 1
+    assert level() == "amber"  # late but not yet timed out
+    now[0] += relay_link.HEARTBEAT_TIMEOUT_SECONDS
+    assert level() == "red"  # offline
+
+    link.record_heartbeat(_heartbeat(printer={"state": "busy"}))
+    assert level() == "amber"
+    link.record_heartbeat(_heartbeat())
+    link.register_job("j1", "receipt", 100)
+    assert level() == "amber"  # pushing a receipt
+    link.finish_job("j1", "completed")
+    assert level() == "green"
+
+    link.record_heartbeat(_heartbeat(printer={"state": "error"}))
+    assert level() == "red"
+    link.record_heartbeat(_heartbeat())
+    link.mark_unreachable("ConnectionError")
+    assert level() == "red"
+
+    assert level("console") == "amber"
+    assert level("usb", True) == "green"
+    assert level("usb", False) == "red"
+
+
+def test_printer_link_endpoint_includes_indicator(token_env):
+    assert hardware.printer.output_mode == "console"  # test default output
+    data = relay_link.get_printer_link()
+    assert data["output_mode"] == "console"
+    assert data["indicator"]["level"] == "amber"
+
+
 def test_link_requires_token(monkeypatch):
     monkeypatch.delenv("PC1_RELAY_TOKEN", raising=False)
     monkeypatch.delenv("PC1_RELAY_TOKEN_FILE", raising=False)

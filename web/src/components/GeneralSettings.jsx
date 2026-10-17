@@ -5,12 +5,15 @@ import { INK_GRADIENTS } from '../constants';
 import PrimaryButton from './PrimaryButton';
 import LocationSearch from './widgets/LocationSearch';
 import { adminAuthFetch } from '../lib/adminAuthFetch';
+import PrinterStatusDot from './PrinterStatusDot';
+import { indicatorLabel } from '../hooks/usePrinterLink';
 
 
 const GeneralSettings = ({
   settings,
   saveGlobalSettings,
   onConfigImported,
+  printerLink,
 }) => {
   const inputClass = 'w-full p-3 text-base border-2 border-gray-300 rounded-lg focus:outline-none box-border';
   const labelClass = 'block mb-2 text-sm text-black font-bold';
@@ -50,41 +53,6 @@ const GeneralSettings = ({
       .catch((err) => console.error('Error fetching version:', err));
   }, []);
 
-  // Print output and ESP32 relay link status (polled; derived from heartbeats).
-  const [printerLink, setPrinterLink] = useState(null);
-
-  useEffect(() => {
-    const fetchLink = async () => {
-      try {
-        const response = await adminAuthFetch('/api/printer/link');
-        if (response.ok) setPrinterLink(await response.json());
-      } catch (err) {
-        console.error('Error fetching printer link:', err);
-      }
-    };
-
-    fetchLink();
-    const interval = setInterval(fetchLink, 5000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const linkLabel = (link) => {
-    if (!link) return 'Loading…';
-    if (link.output_mode === 'console') return 'Console (development: receipts are logged)';
-    if (link.output_mode === 'usb') return 'USB printer (development)';
-    return {
-      online: link.available ? 'ESP32 online' : 'ESP32 online, printer not ready',
-      offline: 'ESP32 offline',
-      unreachable: 'ESP32 unreachable',
-      never_seen: 'Waiting for ESP32',
-    }[link.state] || link.state;
-  };
-
-  const linkDotClass = (link) => {
-    if (!link) return 'bg-gray-300';
-    if (link.output_mode !== 'esp32') return 'bg-gray-400';
-    return link.available ? 'bg-green-500' : 'bg-red-500';
-  };
 
   const getApiError = (data, fallback) => {
     return data?.detail || data?.error || data?.message || fallback;
@@ -291,8 +259,8 @@ const GeneralSettings = ({
           <div className='mb-4' data-testid='printer-link'>
             <label className={labelClass}>Printer Connection</label>
             <div className='flex items-center gap-2 text-sm text-black'>
-              <span className={`inline-block w-2.5 h-2.5 rounded-full ${linkDotClass(printerLink)}`} />
-              <span className='font-bold'>{linkLabel(printerLink)}</span>
+              <PrinterStatusDot link={printerLink} />
+              <span className='font-bold'>{indicatorLabel(printerLink)}</span>
             </div>
             {printerLink?.output_mode === 'esp32' && (
               <div className='text-xs text-gray-600 mt-1 space-y-0.5'>

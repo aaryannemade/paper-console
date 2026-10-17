@@ -301,6 +301,43 @@ class DeviceLink:
             }
 
 
+LATE_HEARTBEAT_SECONDS = 2 * HEARTBEAT_INTERVAL_SECONDS
+ACTIVE_JOB_STATES = frozenset({"receiving", "printing"})
+
+
+def status_indicator(snapshot: dict, output_mode: str, output_available: bool) -> dict:
+    """Coarse green/amber/red summary for the settings top bar.
+
+    Green means the relay can accept a print. It does not prove paper is loaded:
+    the device does not sense the printer's physical state.
+    """
+    if output_mode == "console":
+        return {"level": "amber", "label": "Console output: no printer connected"}
+    if output_mode == "usb":
+        if output_available:
+            return {"level": "green", "label": "USB printer ready"}
+        return {"level": "red", "label": "USB printer unavailable"}
+    if output_mode != "esp32":
+        return {"level": "red", "label": f"Unknown print output: {output_mode}"}
+
+    if not snapshot.get("available"):
+        state = snapshot.get("state")
+        label = {
+            "never_seen": "Waiting for ESP32",
+            "offline": "ESP32 offline",
+            "unreachable": "ESP32 unreachable",
+        }.get(state, "Printer not ready")
+        return {"level": "red", "label": label}
+
+    last_job = snapshot.get("last_job") or {}
+    if snapshot.get("printer_state") == "busy" or last_job.get("state") in ACTIVE_JOB_STATES:
+        return {"level": "amber", "label": "Printing"}
+    age = snapshot.get("heartbeat_age_s")
+    if age is not None and age > LATE_HEARTBEAT_SECONDS:
+        return {"level": "amber", "label": f"ESP32 heartbeat late ({int(age)} s)"}
+    return {"level": "green", "label": "ESP32 online, ready to print"}
+
+
 link = DeviceLink()
 
 router = APIRouter(tags=["device"])
@@ -328,5 +365,9 @@ def get_printer_link():
     import app.hardware as hardware
 
     snapshot = link.snapshot()
-    snapshot["output_mode"] = getattr(hardware.printer, "output_mode", "unknown")
+    output_mode = getattr(hardware.printer, "output_mode", "unknown")
+    snapshot["output_mode"] = output_mode
+    snapshot["indicator"] = status_indicator(
+        snapshot, output_mode, hardware.printer_is_available()
+    )
     return snapshot
