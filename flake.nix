@@ -54,6 +54,12 @@
               pkgs.bash
               pkgs.lsof
               pkgs.libusb1 # Native USB printer-class transport (development)
+
+              # ESP32-S3 relay firmware (firmware/): PlatformIO builds, flashes and
+              # monitors it; on Linux this is an FHS environment so the toolchains
+              # PlatformIO downloads into ~/.platformio run unmodified.
+              pkgs.platformio
+              pkgs.esptool # Standalone flashing, chip/flash info, erase
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.procps ];
 
             # Avoid importing unrelated user-installed Python packages.
@@ -65,6 +71,7 @@
               echo "Backend: just backend"
               echo "Tests:   just test"
               echo "UI:      just frontend-install && just frontend"
+              echo "ESP32:   just fw-build / just fw-flash / just fw-monitor"
             '';
           };
         });

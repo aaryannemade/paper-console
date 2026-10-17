@@ -127,6 +127,12 @@ the timezone in settings (not the OS timezone) controls receipts and schedules.
 Every receipt is rendered by the same renderer into one 384-dot-wide bitmap, then
 handed to the output selected by `PC1_PRINTER_OUTPUT`:
 
+The ESP32 UART output downloads 64-row bitmap bands into printer RAM before
+printing them (`GS *` / `GS /`), avoiding the stretch and pale dithering seen
+with streaming raster commands at 9600 baud. Native USB retains its 24-row
+`GS v 0` format. See [printer UART reference](docs/printer-uart-reference.md)
+for calibration results and remaining band-boundary seams.
+
 | Value | Use | Behavior |
 | --- | --- | --- |
 | `esp32` | Production (default) | Pushes jobs to the ESP32-S3 relay over HTTP ([protocol](docs/relay-protocol.md)). Needs `PC1_RELAY_TOKEN` and heartbeats from the device; `PC1_RELAY_URL` optionally pins the device URL. Develop against `just relay-sim`. |
@@ -464,8 +470,71 @@ The server never accesses GPIO or provisions a host serial port. For development
 use `console`, connect a printer over native USB, or use a USB-to-TTL serial
 adapter with `PC1_PRINTER_OUTPUT=usb`. For the ESP32 relay protocol, serial framing and
 electrical considerations, see [printer UART reference](docs/printer-uart-reference.md)
-and [relay protocol](docs/relay-protocol.md). ESP32 wiring and firmware belong to
-Step 6; pin assignments will be confirmed for the chosen board.
+and [relay protocol](docs/relay-protocol.md).
+
+### ESP32-S3 relay firmware (`firmware/`)
+
+PlatformIO/Arduino firmware for the **Seeed XIAO ESP32S3**, built and flashed
+from the Nix shell (`pio` and `esptool` are included):
+
+```bash
+just fw-build                # compile
+just fw-flash                # flash over USB (/dev/ttyACM0; or `just fw-flash /dev/ttyACM1`)
+just fw-monitor              # USB log
+```
+
+Flashing normally needs no button presses; if the port does not respond, hold
+**BOOT** while plugging in the board and retry.
+
+| Printer (CSN-A2 TTL) | XIAO ESP32S3 |
+| --- | --- |
+| RX | TX — D6 / GPIO43 |
+| TX | RX — D7 / GPIO44 (not needed for printing; ESP32 pins are **not 5 V tolerant**) |
+| GND | GND (shared with the printer's own 5 V supply) |
+
+**Controls:** DFRobot SEN0235 (EC11 rotary encoder with push button), powered
+from **3V3** (not 5V: its pull-ups go to VCC):
+
+| Encoder module | XIAO ESP32S3 |
+| --- | --- |
+| VCC / GND | 3V3 / GND |
+| A / B | D0 (GPIO1) / D1 (GPIO2) |
+| C (button, low when pressed) | D3 (GPIO4) |
+
+One detent is one channel step (clockwise up, wrapping 8 → 1); the position
+is saved across restarts and re-sent whenever the link to the server comes
+up. The button reports `press`, `hold` (5 s) and `hold_release`. Events go to
+`POST /api/device/events` one at a time, retried with the same `event_id`, and
+dropped after 5 s rather than replayed late. `just fw-monitor` shows each
+input (`[input] ...`) and the server's answer (`[event] ... -> printing_channel`);
+`http://<relay>/ui/inputs` shows the current state.
+
+**Setup:** an unconfigured relay opens the open WiFi network
+`PaperConsole-XXXXXX`; joining it shows the setup page (or open
+`http://192.168.4.1/`). Enter the WiFi network, the server URL as reachable from
+the relay (e.g. `http://192.168.1.20:8000`) and the same `PC1_RELAY_TOKEN` as
+the server. The network list comes from a scan made before the setup network
+starts; **Scan** refreshes it with a short background scan. After a restart the
+page is at `http://paper-console.local/` (mDNS; one relay per network) or
+`http://<relay-ip>/`, showing the link and printer state, with a
+**Print test page** button that prints locally (wiring check without the
+server). The page has no login: anyone on the network can change the relay's
+settings. The relay token only authenticates requests between the server and
+the relay; the page accepts a new one but never shows it. Holding **BOOT** for 5 s
+erases the settings and reopens the setup network. If the network is
+unavailable for 30 s, the setup network comes up again until it reconnects.
+
+The relay sends heartbeats to the server, accepts pushed jobs and writes the
+records to the printer at 9600 baud, exactly like `testing/relay_simulator.py`.
+For development, the server must listen on the LAN and the host firewall must
+allow its port:
+
+```bash
+export PC1_RELAY_TOKEN=...                       # same value as on the relay
+PC1_PRINTER_OUTPUT=esp32 just backend 0.0.0.0 8000
+sudo nixos-firewall-tool open tcp 8000           # NixOS; temporary until reboot
+just device position 3 && just device press      # print channel 3 via the relay
+```
 
 ---
 

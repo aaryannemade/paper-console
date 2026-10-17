@@ -39,6 +39,9 @@ config.json.bak
 .coverage
 htmlcov/
 
+# ESP32 firmware build output (PlatformIO)
+firmware/.pio/
+
 # IDE
 .vscode/
 .idea/

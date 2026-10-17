@@ -1,7 +1,9 @@
 """Production output: push print jobs to the ESP32-S3 relay over HTTP.
 
-A receipt becomes a job of records (escpos.receipt_records): the preamble, one
-record per raster strip and the cutter feed. The job is created on the device,
+A receipt becomes a job of records (escpos.downloaded_receipt_records): the
+preamble, one RAM bitmap definition + print per band and the cutter feed.
+64-row bands avoid vertical stretching seen with GS v 0 at 9600 baud.
+The job is created on the device,
 streamed in chunks no larger than the device's limit, and then followed until
 the device reports a final state (status callback, with polling as a fallback).
 The printer reservation is held until then, so jobs never overlap.
@@ -257,7 +259,18 @@ class Esp32RelayOutput(PrintOutput):
             raise PrinterTransportError(
                 f"Receipt is {img.width} dots wide; the printer takes {width_dots}"
             )
-        records = escpos.receipt_records(img, feed_lines_after)
+        # Each record must fit a chunk. Older/smaller relays can use shorter
+        # eight-row-aligned bands without falling back to the stretching
+        # streaming raster command. Cap image data at the verified 3 KiB.
+        width_bytes = (img.width + 7) // 8
+        chunk_limit = self._limits().limits.max_chunk_bytes
+        band_rows = min(
+            escpos.DOWNLOADED_BAND_ROWS,
+            min(3072, chunk_limit - 9) // width_bytes // 8 * 8,
+        )  # 4-byte definition + 3-byte print + 2-byte record framing.
+        if band_rows < 8:
+            raise PrinterTransportError("ESP32 chunk limit cannot fit an eight-row bitmap band")
+        records = escpos.downloaded_receipt_records(img, feed_lines_after, band_rows=band_rows)
         with self._job_lock:
             job_id, total = self._push(records, "receipt", cancel_event)
             stats = self._await(job_id, total, cancel_event)

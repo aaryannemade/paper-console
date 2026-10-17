@@ -38,3 +38,22 @@ test *args:
 # Validate every Python module's icon references against the bundled icons.
 icons:
     python scripts/validate_icons.py
+
+# Absolute path: `pio device monitor` filters resolve a relative -d twice.
+firmware_dir := justfile_directory() / "firmware"
+
+# Build the ESP32-S3 relay firmware (firmware/, PlatformIO).
+fw-build:
+    pio run -d "{{firmware_dir}}"
+
+# Build and flash the relay firmware; port defaults to /dev/ttyACM0 (PC1_ESP32_PORT).
+fw-flash port="":
+    pio run -d "{{firmware_dir}}" -t upload --upload-port "${1:-${PC1_ESP32_PORT:-/dev/ttyACM0}}"
+
+# Show the relay's USB log (Ctrl+C to quit).
+fw-monitor port="":
+    pio device monitor -d "{{firmware_dir}}" -p "${1:-${PC1_ESP32_PORT:-/dev/ttyACM0}}"
+
+# Erase the whole ESP32 flash, including saved WiFi/server/token settings.
+fw-erase port="":
+    esptool --port "${1:-${PC1_ESP32_PORT:-/dev/ttyACM0}}" erase-flash

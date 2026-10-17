@@ -13,6 +13,7 @@ from PIL import Image
 # command mode, so the guard bytes absorb a few lost payload bytes without
 # shifting the next command.
 RASTER_STRIP_ROWS = 24
+DOWNLOADED_BAND_ROWS = 64  # Physically validated at 384 dots wide over 9600-baud UART.
 RASTER_GUARD_BYTES = 4
 DOTS_PER_LINE = 24
 MAX_FEED_UNITS = 255
@@ -71,6 +72,62 @@ def iter_raster_strips(img: Image.Image) -> Iterator[bytes]:
         yield encode_raster_strip(img.crop((0, top, width, bottom)))
 
 
+def encode_downloaded_bitmap(img: Image.Image) -> bytes:
+    """RAM bitmap: GS * definition followed by GS / normal print.
+
+    Unlike GS v 0, data is column-major: each column contains vertical groups
+    of eight pixels, top pixel in the MSB. Dimensions are in eight-dot units.
+    CSN-A2 manual limits: y <= 48, x*y <= 1536 (12 KiB image data).
+    Those are command-format limits, not verified device capacity: production
+    uses at most 64 rows / 3072 image bytes at 384 dots wide.
+    Keep definition and print in one record so cancellation cannot split them.
+    Does not write flash or change heat/density settings.
+    """
+    img = img.convert("1")
+    width, height = img.size
+    if width % 8 or height % 8 or not width or not height:
+        raise ValueError("Downloaded bitmap dimensions must be positive multiples of 8")
+    x_units, y_units = width // 8, height // 8
+    if x_units > 255 or y_units > 48 or x_units * y_units > 1536:
+        raise ValueError("Downloaded bitmap exceeds CSN-A2 RAM image limits")
+    pixels = img.load()
+    payload = bytearray()
+    for x in range(width):
+        for top in range(0, height, 8):
+            value = 0
+            for bit in range(8):
+                if pixels[x, top + bit] == 0:
+                    value |= 0x80 >> bit
+            payload.append(value)
+    return b"\x1d\x2a" + bytes((x_units, y_units)) + payload + b"\x1d\x2f\x00"
+
+
+def downloaded_receipt_records(
+    img: Image.Image, feed_lines_after: int, *, band_rows: int = DOWNLOADED_BAND_ROWS
+) -> list:
+    """RAM bitmap bands for UART; pad the final band to eight rows with white.
+
+    Explicit larger band heights are for hardware calibration only.
+    """
+    img = pad_to_byte_width(img)
+    if band_rows <= 0 or band_rows % 8:
+        raise ValueError("Downloaded band height must be a positive multiple of 8")
+    if band_rows > 384 or (img.width // 8) * (band_rows // 8) > 1536:
+        raise ValueError("Downloaded band height exceeds CSN-A2 RAM image limits")
+    records = [JOB_PREAMBLE]
+    for top in range(0, img.height, band_rows):
+        strip = img.crop((0, top, img.width, min(top + band_rows, img.height)))
+        if strip.height % 8:
+            padded = Image.new("1", (strip.width, (strip.height + 7) // 8 * 8), 1)
+            padded.paste(strip, (0, 0))
+            strip = padded
+        records.append(encode_downloaded_bitmap(strip))
+    feed = feed_lines(feed_lines_after)
+    if feed:
+        records.append(feed)
+    return records
+
+
 def feed_dots(dots: int) -> bytes:
     """ESC J n, split into commands of at most 255 dots."""
     remaining = max(0, int(dots))
@@ -100,7 +157,7 @@ def is_offline_status(status_byte: int) -> bool:
 #
 # A relay print job is a list of records. Each record is a self-contained piece
 # of printer data that the ESP32 writes to the UART in one go; cancellation is
-# only honored between records (never inside a GS v 0 strip). On the wire, a
+# only honored between records (never inside a bitmap definition/print). On the wire, a
 # chunk body is a sequence of [2-byte big-endian length][record bytes].
 
 RECORD_HEADER_BYTES = 2
@@ -164,12 +221,13 @@ def parse_framed_records(body: bytes) -> list:
 
 
 def decode_raster(data: bytes) -> Optional[Image.Image]:
-    """Rebuild the bitmap from a printer byte stream (GS v 0 strips).
+    """Rebuild GS v 0 strips or GS * / GS / normal-size downloaded bitmaps.
 
     Used by the relay simulator and tests to check what a printer would print.
     Non-raster commands are skipped. Returns None when there is no raster data.
     """
     strips, i = [], 0
+    downloaded = None
     while i < len(data):
         if data[i : i + 4] == b"\x1d\x76\x30\x00" and i + 8 <= len(data):
             width_bytes = data[i + 4] | (data[i + 5] << 8)
@@ -184,6 +242,30 @@ def decode_raster(data: bytes) -> Optional[Image.Image]:
             )
             strips.append(strip)
             i += 8 + size
+        elif data[i : i + 2] == b"\x1d\x2a" and i + 4 <= len(data):
+            width_bytes, height_bytes = data[i + 2], data[i + 3]
+            size = width_bytes * height_bytes * 8
+            payload = data[i + 4 : i + 4 + size]
+            if not size or len(payload) < size:
+                break
+            width, height = width_bytes * 8, height_bytes * 8
+            # Transpose vertical, column-major bytes into PIL row-major bytes.
+            raster = bytearray(b"\xff" * (width_bytes * height))
+            for x in range(width):
+                for block in range(height_bytes):
+                    value = payload[x * height_bytes + block]
+                    for bit in range(8):
+                        if value & (0x80 >> bit):
+                            raster[(block * 8 + bit) * width_bytes + x // 8] &= ~(0x80 >> (x % 8))
+            downloaded = Image.frombytes("1", (width, height), bytes(raster))
+            i += 4 + size
+        elif data[i : i + 2] == b"\x1d\x2f" and i + 3 <= len(data):
+            if downloaded is not None and data[i + 2] in (0, 48):
+                strips.append(downloaded)
+            i += 3
+        elif data[i : i + 2] == ESC_INIT:
+            downloaded = None
+            i += 2
         else:
             i += 1
     if not strips:

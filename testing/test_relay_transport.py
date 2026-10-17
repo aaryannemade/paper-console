@@ -260,13 +260,15 @@ def test_receipt_round_trip_is_byte_exact(make_sim, output):
     stats = output.print_receipt(img, feed_lines_after=4, cancel_event=threading.Event())
 
     assert stats["state"] == "completed" and stats["cancelled"] is False
-    assert stats["strips"] == 6
-    records = escpos.receipt_records(img, 4)
+    assert stats["strips"] == 3
+    records = escpos.downloaded_receipt_records(img, 4)
     assert stats["bytes_sent"] == sum(len(r) for r in records)
     job = sim.jobs[stats["job_id"]]
     assert bytes(job.data) == b"".join(records)
     (job_id, upright), = sim.receipts
-    assert _same(upright.rotate(180), img)
+    decoded = upright.rotate(180)
+    assert _same(decoded.crop((0, 0, img.width, img.height)), img)
+    assert decoded.height == 136  # Final band padded to an eight-row boundary.
     assert relay_link.link.snapshot()["last_job"]["state"] == "completed"
 
 
@@ -290,7 +292,7 @@ def test_small_chunks_and_full_buffer_still_deliver_everything(make_sim, output)
 
 
 def test_cancel_stops_between_records(make_sim, output):
-    sim = make_sim(baud=9600)  # ~1.2 s per strip
+    sim = make_sim(baud=9600)  # ~3.2 s per 64-row band
     cancel = threading.Event()
     result = {}
 
@@ -306,10 +308,12 @@ def test_cancel_stops_between_records(make_sim, output):
     stats = result["stats"]
     assert stats["cancelled"] is True and stats["state"] == "cancelled"
     job = sim.jobs[stats["job_id"]]
-    total = len(escpos.receipt_records(_image(240), 4))
+    total = len(escpos.downloaded_receipt_records(_image(240), 4))
     assert 1 <= job.records_written < total
     # Whole records only: the written bytes parse as complete strips.
-    assert escpos.decode_raster(bytes(job.data)).height % 24 == 0
+    decoded = escpos.decode_raster(bytes(job.data))
+    if decoded is not None:  # Cancellation may win before the first bitmap band.
+        assert decoded.height % 64 == 0
 
 
 def test_lost_status_callbacks_fall_back_to_polling(make_sim, output, monkeypatch):

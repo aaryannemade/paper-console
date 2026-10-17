@@ -1,8 +1,9 @@
 # Container ↔ ESP32 relay protocol
 
 Status: **implemented on the container side** (input events in Step 3b;
-heartbeat, print jobs, job status and cancellation in Step 3c). The firmware
-(Step 6) implements the device side. `testing/relay_simulator.py` is a reference
+heartbeat, print jobs, job status and cancellation in Step 3c). The firmware in
+`firmware/` (Step 6) implements the device side: heartbeats, print jobs, status
+and input events (EC11 rotary encoder with push button). `testing/relay_simulator.py` is a reference
 implementation of the device side and is what the container tests run against.
 
 | Direction | Requests |
@@ -82,7 +83,7 @@ Unknown fields are ignored. Malformed events get `422`.
 | --- | --- | --- |
 | `press` | Menu open (app picker, Quick Actions, Adventure) | `selection`, or `selection_ignored` for a position that is not a choice (nothing prints) |
 | `press` | Otherwise | `printing_channel` — prints the channel at the current position |
-| `hold` | A print is running | `cancel_requested` — the print stops at the next raster strip. The rest of this press is ignored. |
+| `hold` | A print is running | `cancel_requested` — the print stops at the next bitmap-band boundary (up to about 3.2 s at 9600 baud). The rest of this press is ignored. |
 | `hold` | Idle | `hold_ready` — a short paper feed tells the user they can release |
 | `hold_release` | After `hold_ready` | `quick_actions` — prints the Quick Actions menu |
 
@@ -159,7 +160,7 @@ Authorization: Bearer <token>
 | `printer.state` | `ready`, `busy` (printing), `paper_out`, `error` or `offline` (no response on the UART). Only `ready`/`busy` accept jobs. `detail` (≤200 chars) is shown in the UI. |
 | `printer.width_dots` | 8–2048; receipts wider than this are rejected. |
 | `printer.baudrate` | UART speed, 1200–921600; the container uses it to size job timeouts. |
-| `limits.max_chunk_bytes` | 256 B–1 MiB: the largest chunk body the device accepts. Must fit at least one framed 24-row raster strip (1,166 bytes at 384 dots). |
+| `limits.max_chunk_bytes` | 256 B–1 MiB: the largest chunk body the device accepts. A framed 64-row downloaded bitmap is 3,081 bytes at 384 dots. The container shortens bands in multiples of eight rows for smaller limits; at least 393 bytes are needed for eight rows at that width. |
 | `limits.max_job_bytes` | 1 KiB–64 MiB: larger jobs are refused by the container. |
 | `active_job_id` | Job the device is currently processing, if any. |
 
@@ -176,13 +177,16 @@ The container renders a receipt to a 1-bit bitmap and turns it into **records**,
 each a self-contained piece of printer data:
 
 1. preamble (`FS .`),
-2. one record per 24-row raster strip (`GS v 0` + payload + 4 NUL guard bytes,
-   see [printer-uart-reference.md](printer-uart-reference.md)),
-3. the cutter feed (`ESC d n` + `ESC J`).
+2. one record per 64-row RAM bitmap band (`GS *` definition plus `GS / 0` print,
+   see [printer-uart-reference.md](printer-uart-reference.md)); the last band is
+   padded with up to seven white rows to reach an eight-row boundary,
+3. the cutter feed (`ESC J n`, split if necessary).
 
 The device writes each record to the UART **unchanged and in order**. It never
 needs to parse printer commands. Cancellation takes effect only **between**
-records, so the printer is never left inside a raster command.
+records, so the printer is never left inside a bitmap definition or between its
+definition and print command. Records are opaque to the firmware; the HTTP
+framing is unchanged. Native USB output still uses 24-row `GS v 0` raster strips.
 
 Tactile feeds (`kind: "feed"`) are tiny jobs of the same form. The container
 does not wait for them to finish. The firmware initialises its printer UART
