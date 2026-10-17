@@ -30,13 +30,14 @@ Nix and flakes enabled:
 
 ```bash
 nix develop
-export PC1_DEVICE_PASSWORD='choose-your-local-server-password'
-just backend                    # API on http://localhost:8000; console receipts
-
-# In another terminal (also inside nix develop):
 just frontend-install           # First run only
-just frontend                   # Settings UI on http://localhost:5173
+just dev-console                # API :8000 + settings UI :5173; console receipts
 ```
+
+Log in at http://localhost:5173 with the development password `123456789`
+(`dev_password` in the `justfile`; an exported `PC1_DEVICE_PASSWORD` overrides
+it). `just dev-usb` prints to a USB printer and `just dev-esp32` prints through
+the ESP32 relay instead. Ctrl+C stops both servers.
 
 See [Print outputs](#print-outputs) for USB printing and the ESP32 relay
 simulator. API docs are available at [http://localhost:8000/docs](http://localhost:8000/docs).
@@ -86,19 +87,21 @@ With Nix installed and the `nix-command` and `flakes` features enabled:
 
 ```bash
 nix develop
+just frontend-install       # First run only
 
-# Backend (prints are logged to the console)
-export PC1_DEVICE_PASSWORD='choose-your-local-server-password'
-export PC1_RELAY_TOKEN='choose-a-device-token-16+chars'   # enables device input events
+# Backend + settings UI together, one recipe per print output:
+just dev-console            # receipts logged to the console
+just dev-usb                # USB printer (see below)
+just dev-esp32              # ESP32 relay; listens on 0.0.0.0
+just dev-console --bind 0.0.0.0   # reachable from other devices (e.g. over SSH)
+
+# Or run them separately (backend defaults to console output):
 just backend
+just frontend               # in another terminal
 
-# In another terminal: act as the ESP32's controls (same PC1_RELAY_TOKEN)
+# In another terminal: act as the ESP32's controls (development relay token)
 just device position 5
 just device press
-
-# In another terminal, also inside nix develop:
-just frontend-install
-just frontend
 
 # Tests and print snapshots
 just test
@@ -116,8 +119,20 @@ just frontend --host 0.0.0.0
 just test -k printer        # Forward arguments to pytest
 ```
 
-Log into the settings UI using the `PC1_DEVICE_PASSWORD` value exported in the
-backend terminal (if unset, a generated password is printed in the backend log).
+The `dev-*` recipes and `just backend` default to the development-only login
+password `123456789` and relay token `12345678901234567890` (`dev_password` /
+`dev_relay_token` in the `justfile`), so no `.device_password` file is generated
+and `just device` / `just relay-sim` work with every output. Exported `PC1_DEVICE_PASSWORD` / `PC1_RELAY_TOKEN` values take
+precedence. Never use these values in a deployment. The `dev-*` recipes use
+ports 8000 and 5173. `dev-console` and `dev-usb` listen on `127.0.0.1` and
+`dev-esp32` on `0.0.0.0`; `--bind ADDR` changes the address for both servers
+(e.g. `--bind 0.0.0.0` when developing on this machine over SSH, then open
+`http://<host-ip>:5173`). Anyone on the network can then reach the UI, which
+uses the well-known development password, and the host firewall must allow
+ports 5173/8000. They also write the
+backend output to `logs/dev-<output>.log` (ignored by git, recreated on each
+start), so you can follow it from another terminal, e.g.
+`tail -f logs/dev-console.log`.
 The server does not administer its host: no WiFi, SSH, OS password, clock, reboot,
 or in-place updates. It reads the host/container clock without changing it, and
 the timezone in settings (not the OS timezone) controls receipts and schedules.
@@ -157,18 +172,16 @@ To test a printer with a **built-in USB connector** (no serial adapter):
    device number and remove this temporary permission. Only one process can
    claim the native USB interface at a time; stop another backend before
    probing or printing from a separate process.
-3. In a first terminal inside `nix develop`:
-   `export PC1_DEVICE_PASSWORD='choose-your-local-server-password'` then
-   `PC1_PRINTER_OUTPUT=usb just backend`. Confirm
-   `http://localhost:8000/api/printer/status` reports `"ready":true`.
-4. In a second terminal inside `nix develop`: `just frontend-install` (first
-   run only), then `just frontend`. Open `http://localhost:5173` and log in
-   with the server password.
+3. Inside `nix develop`: `just frontend-install` (first run only), then
+   `just dev-usb`. Confirm `http://localhost:8000/api/printer/status` reports
+   `"ready":true`.
+4. Open `http://localhost:5173` and log in with the development password
+   `123456789`.
 5. Use the **print** button on the Sudoku module (or channel 5), or request it
    directly with:
 
    ```bash
-   curl -X POST -H "X-PC1-Device-Password: choose-your-local-server-password" \
+   curl -X POST -H "X-PC1-Device-Password: 123456789" \
      http://localhost:8000/debug/print-module/default-sudoku-001
    ```
 
@@ -527,11 +540,12 @@ unavailable for 30 s, the setup network comes up again until it reconnects.
 The relay sends heartbeats to the server, accepts pushed jobs and writes the
 records to the printer at 9600 baud, exactly like `testing/relay_simulator.py`.
 For development, the server must listen on the LAN and the host firewall must
-allow its port:
+allow its port. `just dev-esp32` binds `0.0.0.0:8000` and uses the development
+relay token `12345678901234567890` unless `PC1_RELAY_TOKEN` is exported; the
+relay must be configured with the same token:
 
 ```bash
-export PC1_RELAY_TOKEN=...                       # same value as on the relay
-PC1_PRINTER_OUTPUT=esp32 just backend 0.0.0.0 8000
+just dev-esp32                                   # backend on the LAN + settings UI
 sudo nixos-firewall-tool open tcp 8000           # NixOS; temporary until reboot
 just device position 3 && just device press      # print channel 3 via the relay
 ```

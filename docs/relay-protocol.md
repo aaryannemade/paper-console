@@ -303,11 +303,13 @@ an answer.
 ## Development
 
 ```bash
-export PC1_RELAY_TOKEN=dev-relay-token-0123456789
-PC1_PRINTER_OUTPUT=esp32 just backend     # terminal 1
+just dev-esp32                            # terminal 1: backend + settings UI
 just relay-sim                            # terminal 2: simulated ESP32 at 9600 baud
 just device position 5 && just device press   # terminal 3: the device's button
 ```
+
+These recipes share the development relay token `12345678901234567890` unless
+`PC1_RELAY_TOKEN` is exported (then export the same value in each terminal).
 
 The simulator saves each receipt it receives, decoded from the raster bytes, as
 a PNG under `testing/artifacts/relay/`. Use `--baud 0` for instant printing, and

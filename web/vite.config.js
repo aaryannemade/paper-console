@@ -10,10 +10,11 @@ export default defineConfig({
   ],
   server: {
     // Forward every backend route the UI calls; print buttons use /action and /debug.
+    // `just dev-* --bind ADDR` sets PC1_BACKEND_URL when the backend is not on localhost.
     proxy: Object.fromEntries(
       ['/api', '/action', '/debug'].map((prefix) => [
         prefix,
-        { target: 'http://localhost:8000', changeOrigin: true },
+        { target: process.env.PC1_BACKEND_URL || 'http://localhost:8000', changeOrigin: true },
       ]),
     ),
   },

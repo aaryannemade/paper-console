@@ -68,9 +68,9 @@
 
             shellHook = ''
               echo "Paper Console: Python 3.12 + Node.js 22 (Nix-managed dependencies)"
-              echo "Backend: just backend"
+              echo "Dev:     just dev-console / just dev-usb / just dev-esp32 (login 123456789)"
               echo "Tests:   just test"
-              echo "UI:      just frontend-install && just frontend"
+              echo "UI deps: just frontend-install"
               echo "ESP32:   just fw-build / just fw-flash / just fw-monitor"
             '';
           };
