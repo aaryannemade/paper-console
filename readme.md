@@ -298,13 +298,40 @@ container log and persists at `/data/.device_password`. Alternatively, set
 `PC1_DEVICE_PASSWORD` in `.env`. The server clock comes from the container;
 the app timezone in General Settings controls receipt formatting and schedules.
 
-**Portainer:** Build `paper-console:local` on the same Docker host with
-`docker build -t paper-console:local .`, or publish an image and set `PC1_IMAGE`
-in the stack environment. Paste `portainer-compose.yaml` into a stack, replace
-`/path/to/data` with the host directory, and set `PC1_RELAY_TOKEN`, the port
-variables, and optionally `PC1_DEVICE_PASSWORD` in Portainer's stack environment.
-The Portainer file references an image and does not depend on Portainer building
-source code.
+**Portainer:** Paste `portainer-compose.yaml` (also attached to every
+[release](https://github.com/aaryannemade/paper-console/releases)) into a stack,
+replace `/path/to/data` with the host directory, and set `PC1_RELAY_TOKEN`,
+`PUID`/`PGID`, the port variables, and optionally `PC1_DEVICE_PASSWORD` in
+Portainer's stack environment. It pulls
+`ghcr.io/aaryannemade/paper-console:latest`; set `PC1_IMAGE` to pin a version
+(e.g. `ghcr.io/aaryannemade/paper-console:0.1.0-beta.1`) or to use a local
+`docker build -t paper-console:local .`. To update, re-pull the image and
+redeploy the stack (Portainer: "Re-pull image and redeploy"); `/data` is kept.
+
+### Releases
+
+Releases are cut manually with the **Release** GitHub Actions workflow
+(`.github/workflows/release.yml`, run from `main` with a version such as
+`0.1.0-beta.1`). It checks that `CHANGELOG.md` has a section for the version and
+that the tag is new, runs the backend tests and frontend lint/build, builds the
+relay firmware with that version, builds and smoke-tests the container, pushes
+`ghcr.io/aaryannemade/paper-console:<version>` (plus `:latest` if selected, and
+`:<major>.<minor>` for stable versions) for amd64 and arm64, then creates the
+`v<version>` tag and GitHub release. Versions with a suffix (`-beta.1`) are
+marked as pre-releases. Release assets:
+
+| Asset | Use |
+| --- | --- |
+| `paper-console-relay-<version>-xiao_esp32s3-update.bin` | Firmware update, written at `0x10000`; keeps relay settings. |
+| `paper-console-relay-<version>-xiao_esp32s3-factory.bin` | New/erased board, written at `0x0`; erases relay settings. |
+| `portainer-compose.yaml` | Portainer stack. |
+| `SHA256SUMS` | Checksums. |
+
+The **Docker image (manual)** workflow builds a development image on demand
+(`:edge` by default, never `:latest` or a version). Locally,
+`just fw-factory` builds the same factory image; the firmware version comes
+from `PC1_FIRMWARE_VERSION` or `git describe`.
+Release notes come from `CHANGELOG.md` via `scripts/release_notes.py`.
 
 `PC1_PORT` changes the listener inside the container; `PC1_HOST_PORT` changes
 the mapped host port. The container needs outbound LAN access to the ESP32,
@@ -432,8 +459,9 @@ For production deployments, configure these environment variables:
 * **`PC1_CORS_ORIGINS`**: Comma-separated CORS origins (default is local/dev origins only).
 * **`PC1_LOG_LEVEL`**: Backend log level (default: `WARNING` on device builds).
 
-Container images are built by `.github/workflows/docker-image.yml`; deploy by
-replacing the image and keeping the `/data` bind mount.
+Container images are published by the Release workflow (see
+[Releases](#releases)); deploy by replacing the image and keeping the `/data`
+bind mount.
 
 ---
 
@@ -496,6 +524,7 @@ paper-console/
 │   │   └── wotd.py
 ├── firmware/                   # XIAO ESP32S3 relay (PlatformIO)
 │   ├── platformio.ini          # Board, pins and build flags
+│   ├── scripts/release.py      # Firmware version + `-t factory` merged image
 │   └── src/                    # WiFi/portal, relay jobs, inputs, OLED, health
 ├── web/                        # React + Vite + Tailwind settings UI
 │   ├── src/                    # Settings UI, shared constants/styles
@@ -503,6 +532,7 @@ paper-console/
 │   ├── package.json
 │   └── vite.config.js
 ├── scripts/
+│   ├── release_notes.py        # GitHub release notes from CHANGELOG.md
 │   └── validate_icons.py      # Validate receipt icon references
 ├── testing/                    # Pytest, print/UI render helpers, snapshot galleries
 │   ├── render_all_prints.py
@@ -513,7 +543,8 @@ paper-console/
 │   └── artifacts/
 ├── icons/                      # Icon source assets
 ├── images/                     # Product photos used in the README
-├── .github/workflows/          # docker-image.yml: builds and publishes the image
+├── .github/workflows/          # release.yml (releases), docker-image.yml (manual dev image)
+├── CHANGELOG.md                # Release notes source
 ├── .env.example
 ├── AGENTS.md
 ├── config.json                 # Local settings (gitignored in normal use)

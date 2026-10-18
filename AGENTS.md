@@ -150,3 +150,7 @@ Rules:
 - It seeds temporary modules (`UI TEST :: ...`) so every module-type editor is covered, then cleans them up.
 - It writes run artifacts (`manifest.txt`, `failures.txt`, `notes.txt`) in the output folder.
 - If Playwright reports missing Linux libs, use `npx --yes -p playwright playwright install-deps chromium` (requires sudo).
+
+## Releases
+
+Releases are cut only by the manual `Release` workflow (`.github/workflows/release.yml`) from `main`; `docker-image.yml` is a manual development build that must never publish `:latest` or version tags. Before a release, add a `## [<version>]` section to `CHANGELOG.md` (the workflow refuses versions without one; `scripts/release_notes.py --check <version>` validates locally). Firmware versions come from `PC1_FIRMWARE_VERSION` (set by the workflow) or `git describe` via `firmware/scripts/release.py`; do not hard-code them in `platformio.ini`. Validate workflow edits with `nix shell nixpkgs#actionlint nixpkgs#shellcheck --command actionlint`.

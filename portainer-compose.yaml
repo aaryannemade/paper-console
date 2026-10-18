@@ -1,8 +1,9 @@
-# Build `paper-console:local` on the Docker host first, or set PC1_IMAGE to a
-# published image in Portainer's stack environment variables.
+# Uses the published release image. Set PC1_IMAGE in Portainer's stack
+# environment to pin a version (e.g. ghcr.io/aaryannemade/paper-console:0.1.0-beta.1)
+# or to use a locally built `paper-console:local`.
 services:
   paper-console:
-    image: ${PC1_IMAGE:-paper-console:local}
+    image: ${PC1_IMAGE:-ghcr.io/aaryannemade/paper-console:latest}
     restart: unless-stopped
     # Run as the host user/group that owns the /data bind mount
     # (`id -u` / `id -g`, e.g. 1000:100 on NixOS). Set PUID/PGID in the

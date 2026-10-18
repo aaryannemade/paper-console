@@ -1,0 +1,281 @@
+name: Release
+
+# Manually cuts a release from main:
+#   1. validate the version, CHANGELOG.md section and that the tag is new
+#   2. run backend tests and the frontend lint/build
+#   3. build the relay firmware (update + factory images) with the version
+#   4. build the container, smoke-test it, then push the multi-arch image
+#      as :<version> (+ :latest, + :<major>.<minor> for stable versions)
+#   5. tag v<version> and publish the GitHub release with notes and assets
+# Nothing is tagged or released unless every earlier step succeeds.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without "v" (e.g. 0.1.0-beta.1 or 0.1.0)
+        required: true
+      latest:
+        description: Also tag the image as :latest
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  PYTHON_VERSION: "3.14"  # Dockerfile pins 3.14.7
+  NODE_VERSION: "26.12.0"
+  PLATFORMIO_VERSION: "6.1.19"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+      previous_tag: ${{ steps.check.outputs.previous_tag }}
+      image: ${{ steps.check.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate version, branch, tag and changelog
+        id: check
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "::error::Run the release from the main branch (got $GITHUB_REF)"; exit 1
+          fi
+          python scripts/release_notes.py --check "$VERSION"
+          tag="v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null || \
+             git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag $tag already exists"; exit 1
+          fi
+          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          prerelease=false
+          [[ "$VERSION" == *-* ]] && prerelease=true
+          {
+            echo "version=$VERSION"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "previous_tag=$previous"
+            echo "image=$REGISTRY/${GITHUB_REPOSITORY,,}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (pre-release: $prerelease, previous: ${previous:-none})"
+
+  test:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Backend tests
+        env:
+          PC1_PRINTER_OUTPUT: console
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest -q testing
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Frontend lint and build
+        run: |
+          npm ci --prefix web
+          npm run lint --prefix web
+          npm run build --prefix web
+
+  firmware:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('firmware/platformio.ini') }}
+      - name: Build firmware ${{ env.VERSION }}
+        env:
+          PC1_FIRMWARE_VERSION: ${{ env.VERSION }}
+        run: |
+          python -m pip install "platformio==$PLATFORMIO_VERSION"
+          pio run -d firmware -t factory
+      - name: Collect images
+        run: |
+          set -euo pipefail
+          build=firmware/.pio/build/xiao_esp32s3
+          base="paper-console-relay-$VERSION-xiao_esp32s3"
+          mkdir -p dist
+          cp "$build/firmware.bin" "dist/$base-update.bin"
+          cp "$build/factory.bin" "dist/$base-factory.bin"
+          strings "dist/$base-update.bin" | grep -qxF "$VERSION" || {
+            echo "::error::Version string $VERSION not found in the firmware"; exit 1; }
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: dist/
+          if-no-files-found: error
+
+  docker:
+    needs: [prepare, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      IMAGE: ${{ needs.prepare.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          build-args: APP_VERSION=${{ env.VERSION }}
+          tags: paper-console:release-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (non-root, read-only root, /data bind mount, console print)
+        run: |
+          set -euo pipefail
+          data_dir="$(mktemp -d)"
+          sudo chown 1000:1000 "$data_dir"
+          # shellcheck disable=SC2329  # invoked by the EXIT trap
+          cleanup() { docker rm -f pc-smoke >/dev/null 2>&1 || true; sudo rm -rf "$data_dir"; }
+          trap cleanup EXIT
+          docker run -d --name pc-smoke --user 1000:1000 \
+            --read-only --tmpfs /tmp:rw,mode=1777 \
+            -v "$data_dir:/data" -p 127.0.0.1:18080:8000 \
+            -e PC1_DEVICE_PASSWORD=release-smoke-password \
+            -e PC1_RELAY_TOKEN=release-smoke-token-0123456789 \
+            -e PC1_PRINTER_OUTPUT=console paper-console:release-test
+          for _ in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:18080/api/health >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/api/health
+          curl -fsS http://127.0.0.1:18080/ | grep -q 'id="root"'
+          docker exec pc-smoke cat /app/.version | grep -qxF "$VERSION"
+          curl -fsS -X POST -H 'X-PC1-Device-Password: release-smoke-password' \
+            http://127.0.0.1:18080/action/print-channel/5
+          for _ in $(seq 1 20); do
+            if docker logs pc-smoke 2>&1 | grep -q '\[RECEIPT\]'; then
+              echo "Smoke test passed"; exit 0
+            fi
+            sleep 1
+          done
+          docker logs pc-smoke
+          exit 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=latest,enable=${{ inputs.latest }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=Paper Console
+            org.opencontainers.image.version=${{ env.VERSION }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: APP_VERSION=${{ env.VERSION }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: [prepare, firmware, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      IMAGE: ${{ needs.prepare.outputs.image }}
+      PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+      LATEST: ${{ inputs.latest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: dist
+      - name: Assets and checksums
+        run: |
+          set -euo pipefail
+          cp portainer-compose.yaml dist/portainer-compose.yaml
+          cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          args=(--image "$IMAGE" --repo "$GITHUB_REPOSITORY")
+          [[ -n "$PREVIOUS_TAG" ]] && args+=(--previous-tag "$PREVIOUS_TAG")
+          [[ "$LATEST" == true ]] && args+=(--latest)
+          python scripts/release_notes.py "$VERSION" "${args[@]}" > notes.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Tag and publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          flags=()
+          [[ "$PRERELEASE" == true ]] && flags+=(--prerelease)
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "Paper Console $VERSION" \
+            --notes-file notes.md \
+            "${flags[@]}"
