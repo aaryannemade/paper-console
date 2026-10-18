@@ -381,6 +381,10 @@ def test_device_refetches_channel_names_only_when_hash_changes(make_sim, monkeyp
     assert sim.channel_fetches == 2
     assert sim.channel_names[2] == "Work update" and sim.channels_hash != first_hash
 
+    settings.timezone, settings.time_format = "Asia/Kolkata", "24h"
+    sim.send_heartbeat()
+    assert sim.clock == {"utc_offset_s": 19800, "time_format": "24h"}
+
 
 def test_raster_printer_renders_through_relay(make_sim, output):
     sim = make_sim()
@@ -601,3 +605,12 @@ def test_offline_device_skips_scheduled_print(relay_printer, monkeypatch):
     relay_printer.stop()
     relay_link.link.mark_unreachable("ConnectionError")
     assert hardware.try_begin_print_job() is False
+
+
+def test_heartbeat_reports_display_and_returns_clock(make_sim):
+    sim = make_sim()
+    reply = sim.send_heartbeat()
+    assert set(reply["clock"]) == {"utc_offset_s", "time_format"}
+    assert relay_link.link.snapshot()["health"]["display"] == "absent"
+    # Older firmware without the field still validates.
+    assert relay_link.DeviceHealth.model_validate({**sim.health(), "display": None}).display is None

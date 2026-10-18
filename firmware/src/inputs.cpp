@@ -52,6 +52,8 @@ volatile uint32_t g_detents = 0;
 volatile uint32_t g_invalid = 0;
 volatile uint32_t g_presses = 0;
 volatile Reset g_reset = Reset::Idle;
+volatile uint32_t g_lastTurnMs = 0;
+volatile uint32_t g_lastActivityMs = 0;
 String g_lastEvent = "none";
 SemaphoreHandle_t g_mu = nullptr;
 
@@ -124,6 +126,7 @@ void inputTask(void*) {
         quarterSteps = 0;  // Partial turns (bounce, rocking) are dropped here.
         if (detents) {
           ++g_detents;
+          g_lastActivityMs = now;
           bool clockwise = detents * kDirection > 0;
           if (g_reset != Reset::Idle) {
             // During the sequence turns are steps, not channel changes.
@@ -137,6 +140,7 @@ void inputTask(void*) {
             }
           } else {
             g_position = wrap(g_position + detents * kDirection);
+            g_lastTurnMs = now ? now : 1;
             logEvent(String("position ") + g_position + (clockwise ? " (clockwise)" : " (anticlockwise)"));
             events::position(g_position);
           }
@@ -153,6 +157,7 @@ void inputTask(void*) {
     if (rawPressed != stablePressed && now - rawSinceMs >= kButtonDebounceMs) {
       stablePressed = rawPressed;
       g_pressed = stablePressed;
+      g_lastActivityMs = now;
       if (stablePressed) {
         pressStartMs = now;
         holdSent = false;
@@ -240,6 +245,9 @@ void begin() {
 }
 
 int currentPosition() { return g_position; }
+uint32_t lastTurnMs() { return g_lastTurnMs; }
+uint32_t lastActivityMs() { return g_lastActivityMs; }
+int resetStep() { return static_cast<int>(g_reset); }
 
 void loop() {
   for (;;) {

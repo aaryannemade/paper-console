@@ -271,6 +271,7 @@ const GeneralSettings = ({
                     <p>Uptime at report: {printerLink.health.uptime_s} s · WiFi: {printerLink.health.wifi_connected ? 'connected' : 'disconnected'}</p>
                     <p>Server link: {printerLink.health.server_state} — {printerLink.health.server_detail}</p>
                     <p>UART: {printerLink.health.uart_ready ? 'ready' : 'unavailable'} · Physical printer: unknown (paper and power are not sensed)</p>
+                    {printerLink.health.display && <p>Display: {printerLink.health.display === 'ok' ? 'OLED connected' : 'not detected'}</p>}
                     <p>Active job: {printerLink.health.active_job_id ? `${printerLink.health.active_job_state} · ${printerLink.health.active_job_id}` : 'none'}</p>
                     <p>Last device job: {printerLink.health.last_job_state || 'none'}{printerLink.health.last_job_error ? ` — ${printerLink.health.last_job_error}` : ''}</p>
                   </div>

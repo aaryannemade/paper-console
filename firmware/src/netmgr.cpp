@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "display.h"
 #include "relay.h"
 #include "settings.h"
 #include "uplink.h"
@@ -316,6 +317,7 @@ void scheduleRestart(uint32_t delayMs) { g_restartAtMs = millis() + delayMs; }
 
 void factoryReset(const char* reason) {
   Serial.printf("[setup] %s: erasing settings and restarting into setup\n", reason);
+  display::showResetting();
   settings::erase();
   delay(200);
   ESP.restart();

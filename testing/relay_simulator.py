@@ -126,6 +126,7 @@ class RelaySimulator:
         self.channel_names = {}
         self.channels_hash = None
         self.channel_fetches = 0
+        self.clock = None  # {"utc_offset_s", "time_format"} from the last heartbeat reply
         self._stop = threading.Event()
         self._threads = []
         self._session = requests.Session()
@@ -210,6 +211,7 @@ class RelaySimulator:
                 "last_job_id": last.job_id if last else "",
                 "last_job_state": last.state if last else "",
                 "last_job_error": (last.error or "") if last else "",
+                "display": "absent",  # The simulator has no OLED.
             }
 
     def send_heartbeat(self):
@@ -244,6 +246,8 @@ class RelaySimulator:
             self.last_heartbeat_error = str(exc)
             return None
         self._sync_channel_names(reply.get("channels_hash"))
+        # Display clock hints (the firmware takes UTC from NTP and applies these).
+        self.clock = reply.get("clock") or self.clock
         return reply
 
     def _sync_channel_names(self, server_hash):

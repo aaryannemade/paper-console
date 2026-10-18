@@ -3,8 +3,10 @@
 Status: Steps 1–5 (container side) and the core Step 6 firmware are implemented.
 WiFi printing, physical encoder/button input and corrected raster geometry have
 been verified on the XIAO ESP32S3. Step 6 hardware acceptance is still partial;
-Steps 7–10 add channel indication, browser flashing, device health visibility and
-an encoder reset sequence. Step 11 closes out hardware/container validation.
+Steps 7, 9 and 10 (OLED channel display, device health and the encoder reset
+sequence) are implemented and passed hardware acceptance. Firmware is flashed
+from the terminal (`just fw-flash`); the browser flasher (former Step 8) was
+dropped. Step 11 closes out hardware/container validation.
 Printer UART details are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
@@ -65,11 +67,10 @@ traffic does not deadlock while the container is pushing a receipt.
 | --- | --- | --- |
 | Container packaging | `Dockerfile`, `docker-compose.yaml`, `portainer-compose.yaml`, `app/paths.py` | Multi-stage image, mounted data directory, non-root runtime and health check (Step 4 complete). |
 | ESP32 core (Step 6) | `firmware/`, [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implemented; physical prints/input verified. Failure/recovery, cancellation and scheduling acceptance still pending. |
-| Channel indication (Step 7) | Encoder firmware, prospective display hardware, container channel metadata | Channel names done end to end (UI, hash-triggered fetch to the device). Choose the display (OLED candidate) and render. |
-| Browser flashing (Step 8) | Firmware release CI, GitHub Pages installer | Build/publish board-specific binaries and a Web Serial flashing page. |
-| Device health (Step 9) | Firmware HTTP API/UI, container link UI | Health endpoint, heartbeat telemetry and both status UIs implemented; combined hardware acceptance pending. |
-| Encoder reset sequence (Step 10) | `firmware/src/inputs.cpp`, `hold_cancel` gesture | Implemented (hold 10 s, clockwise, anticlockwise, click = erase settings); hardware test pending. |
-| Final acceptance (Step 11) | Real ESP32/printer, container deployment, protocol checks | Validate failure/recovery, scheduling, menus, flashing and all new device features. |
+| Channel indication (Step 7) | `firmware/src/display.cpp`, `timekeeping.cpp`, container channel metadata | Channel names done end to end. SSD1306 OLED screens implemented (channel, setup AP, printing, disconnected, idle clock + WiFi signal); passed hardware acceptance 2026-10-18. |
+| Device health (Step 9) | Firmware HTTP API/UI, container link UI | Implemented; passed hardware acceptance 2026-10-18. |
+| Encoder reset sequence (Step 10) | `firmware/src/inputs.cpp`, `hold_cancel` gesture | Implemented (hold 10 s, clockwise, anticlockwise, click = erase settings); passed hardware acceptance 2026-10-18. |
+| Final acceptance (Step 11) | Real ESP32/printer, container deployment, protocol checks | Validate failure/recovery, scheduling, menus and all new device features. |
 
 ## Step 1 — Remove WiFi provisioning end to end
 
@@ -251,7 +252,25 @@ scheduled prints, WiFi/server/device restart recovery and production-container
 end-to-end acceptance. Track these in Step 11; simulator coverage does not count
 as hardware acceptance. Quick Actions UX clarification is also deferred there.
 
-## Step 7 — Show the selected channel (planned)
+## Step 7 — Show the selected channel (implemented and hardware-tested)
+
+Implemented display (channel screen has no header bar; name or number plus position dots only): SSD1306 128×64 I²C OLED (3V3, SDA = D4/GPIO5, SCL =
+D5/GPIO6, address 0x3C or 0x3D, `PC1_OLED_*` build flags incl. 180° rotation),
+driven by U8g2 from a low-priority task that reads cached state only and pushes
+a frame only when it changed. Screens, highest priority first: reset-sequence
+step (and "Resetting" just before erasing) → channel name, or the large number
+if unnamed, plus 1–8 position dots for 3 s after a knob turn → WiFi setup AP
+(SSID and 192.168.4.1) → printing (with a hold-to-cancel hint) →
+UART error / no WiFi / connecting / server offline with the link detail → idle
+clock with WiFi signal bars top right. The clock uses NTP for UTC and the
+heartbeat reply's `clock` (timezone offset, 12h/24h); before both arrive it
+shows `--:--`. Names render with Latin/extended fonts; other characters show
+as `?`; long names wrap to two lines, then three smaller lines, then `...`. The
+idle layout shifts by up to 2 px each minute and the panel dims after 60 s
+without input or a screen change. No display at boot: firmware runs as before
+and `/health` reports `display: "absent"`.
+
+Original planning notes:
 
 - Decide how the user sees the selected channel on the endless rotary encoder.
   Evaluate a small **OLED screen** against simpler indicators; choose the part,
@@ -276,26 +295,14 @@ as hardware acceptance. Quick Actions UX clarification is also deferred there.
 
 Acceptance: each detent visibly selects the correct position, button actions
 match that position, and offline/printing/menu states are understandable on the
-chosen indicator. Hardware choice remains open until evaluated.
+chosen indicator. **Passed on real hardware 2026-10-18** with the SSD1306 OLED
+(see [hardware-acceptance.md](hardware-acceptance.md)).
 
-## Step 8 — GitHub Pages firmware flasher (planned)
+## Step 8 — Browser firmware flasher (dropped)
 
-- Add a static, HTTPS **GitHub Pages** installer using ESP Web Tools/Web Serial
-  so users can connect a XIAO ESP32S3 and flash from a supported desktop browser.
-- Add CI to compile the pinned PlatformIO environment, assign a firmware version
-  and publish versioned firmware binaries and installer manifests. Derive flash
-  offsets from build outputs (or generate a merged image); do not guess them.
-- Provide a clear connect/flash flow, board identification, BOOT/reset recovery
-  instructions and links to WiFi setup at `192.168.4.1` / `paper-console.local`.
-- Decide and document whether each flashing action preserves NVS or performs a
-  clean setup. Make an erase action explicit so updates do not unexpectedly
-  remove WiFi/server/token settings. Never embed credentials in release assets.
-- Keep the CLI flash path available. Explain browser/platform support and USB
-  permissions when Web Serial is unavailable.
-
-Acceptance: a fresh board can be flashed from the published Pages site, complete
-captive setup and print a receipt; an update preserves settings as documented.
-The published manifest/binaries correspond to the displayed firmware version.
+Not planned: firmware is built and flashed from the terminal with
+`just fw-build` / `just fw-flash` inside `nix develop`. The step number is kept
+so references to Steps 9–11 stay valid.
 
 ## Step 9 — Firmware health endpoint and at-a-glance status (implemented and hardware-tested)
 
@@ -312,8 +319,8 @@ and authenticated heartbeat telemetry; the ESP32 page and server General →
 Printer Settings show health, uptime, connection, UART, active job and last
 outcome. Stale/missing reports are explicit. Physical printer status remains
 `unknown` because no validated paper/power signal exists. See
-`relay-protocol.md` for the contract. All pending hardware verification for
-Steps 7 (metadata only), 9 and 10 is consolidated in
+`relay-protocol.md` for the contract. Hardware verification for Steps 7, 9 and
+10 (all passed 2026-10-18) is recorded in
 [hardware-acceptance.md](hardware-acceptance.md).
 
 - Implemented a lightweight firmware **`GET /health`** endpoint with a versioned JSON
@@ -337,7 +344,7 @@ recovery; the endpoint remains responsive during a long receipt. Any claim of
 physical printer availability is backed by a tested signal, otherwise labeled
 unknown rather than inferred.
 
-## Step 10 — Encoder reset sequence (implemented; hardware test pending)
+## Step 10 — Encoder reset sequence (implemented and hardware-tested)
 
 Revised from a plain 10-second reboot: the encoder performs the same **settings
 erase** as holding BOOT 5 s, behind a deliberate sequence so it cannot happen
@@ -364,16 +371,16 @@ Acceptance: short press, 5 s Quick Actions and hold-to-cancel still work;
 holding 10 s alone and releasing prints nothing and opens no menu; the full
 sequence erases settings and opens the setup network; each cancel path leaves
 settings intact and the knob working normally. **Passed on real hardware
-2026-10-17 — see [hardware-acceptance.md](hardware-acceptance.md) for the full
+2026-10-18 — see [hardware-acceptance.md](hardware-acceptance.md) for the full
 result.**
 
 ## Step 11 — Hardware acceptance and migration closeout (in progress)
 
 Use [hardware-acceptance.md](hardware-acceptance.md) as the combined execution
-checklist for the implemented health/status, channel-sync/boot-position and
-encoder-reset changes. The combined firmware-and-software acceptance for
-Steps 7 (channel metadata), 9 (health/status) and 10 (encoder reset) passed
-on real hardware 2026-10-17; see the Results section in that file. Remaining
+checklist for the implemented health/status, channel-sync/boot-position,
+encoder-reset and OLED changes. The combined firmware-and-software acceptance
+for Steps 7 (channel names and OLED display), 9 (health/status) and 10
+(encoder reset) passed on real hardware 2026-10-18; see the Results section in that file. Remaining
 items in this step are now scoped to container/scheduler/recovery acceptance
 and final documentation.
 
@@ -391,12 +398,10 @@ and final documentation.
 - Run the production container with its real data bind mount and ESP32 output.
   Verify scheduled, physical-button and web-UI prints, container recreation with
   persisted settings/password/saves, and relay recovery after recreation.
-- Validate the channel indicator, public browser-flashing flow, health UI and
-  encoder reset sequence on hardware, including first-time onboarding and updates.
-  - Channel metadata, health UI and encoder reset: **passed on real hardware
-    2026-10-17** (see [hardware-acceptance.md](hardware-acceptance.md)). The
-    channel indicator without the OLED and the browser-flashing flow remain
-    separate items.
+- Validate the channel indicator, health UI and encoder reset sequence on
+  hardware, including first-time onboarding and updates. **Done:** passed on
+  real hardware 2026-10-18, including the OLED display (see
+  [hardware-acceptance.md](hardware-acceptance.md)).
 - Reconcile README, protocol, UART reference and troubleshooting with the final
   behaviour; record accepted limits (9600-baud throughput, dithering seams,
   band-boundary cancellation latency and any unverified physical printer state).

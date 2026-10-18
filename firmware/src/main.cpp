@@ -6,11 +6,13 @@
 #include <Arduino.h>
 
 #include "channels.h"
+#include "display.h"
 #include "events.h"
 #include "inputs.h"
 #include "netmgr.h"
 #include "relay.h"
 #include "settings.h"
+#include "timekeeping.h"
 #include "uplink.h"
 #include "web.h"
 
@@ -35,10 +37,12 @@ void setup() {
   netmgr::begin();
   uplink::begin();
   web::begin();
+  display::begin();
 }
 
 void loop() {
   netmgr::loop();
   inputs::loop();
+  timekeeping::loop();
   delay(5);
 }

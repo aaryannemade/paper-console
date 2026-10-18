@@ -552,7 +552,24 @@ starts at **1 on every boot** (it is not saved) and is sent whenever the link to
 the server comes up. The button reports `press`, `hold` (5 s) and
 `hold_release`. The relay fetches channel names from the server whenever they
 change (a hash in each heartbeat reply) and shows the selected channel and its
-name on its status page; they are kept for a future display.
+name on its status page and the OLED.
+
+**Display:** SSD1306 128×64 I²C OLED (0.96", address 0x3C/0x3D), optional:
+
+| OLED module | XIAO ESP32S3 |
+| --- | --- |
+| VCC / GND | 3V3 / GND |
+| SDA / SCL | D4 (GPIO5) / D5 (GPIO6) |
+
+It shows the channel name (or number if unnamed) for 3 s after each knob turn,
+the setup network while the captive portal runs, printing, and no-WiFi /
+server-offline states; otherwise a clock with WiFi signal bars top right. The
+clock takes UTC from NTP (`pool.ntp.org`, so the network needs internet access)
+and the timezone offset and 12h/24h format from the server's settings via the
+heartbeat reply. The reset sequence steps also appear on screen. The idle clock
+shifts a pixel or two each minute and the screen dims after a minute without
+input. Mounted upside down: set `PC1_OLED_ROTATION=2` in
+`firmware/platformio.ini`. Without a display the relay works as before.
 
 **Encoder reset sequence** (same as holding BOOT 5 s: erases WiFi/server/token
 and reopens setup): hold the knob button **10 s** until the XIAO's user LED

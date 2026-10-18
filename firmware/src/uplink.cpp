@@ -11,6 +11,7 @@
 #include "health.h"
 #include "relay.h"
 #include "settings.h"
+#include "timekeeping.h"
 
 namespace uplink {
 namespace {
@@ -81,6 +82,12 @@ uint32_t sendHeartbeat() {
     if (!deserializeJson(reply, response)) {
       intervalS = reply["heartbeat_interval_s"] | 10;
       channelsHash = reply["channels_hash"] | "";
+      JsonObject clock = reply["clock"];
+      if (!clock.isNull() && clock["utc_offset_s"].is<int32_t>()) {
+        // Plausible offsets only (UTC-14 .. UTC+14).
+        int32_t offset = constrain(clock["utc_offset_s"].as<int32_t>(), -14 * 3600, 14 * 3600);
+        timekeeping::setZone(offset, String(clock["time_format"] | "12h") == "24h");
+      }
     }
     intervalS = constrain(intervalS, 2u, 30u);
     setState(true, "connected");

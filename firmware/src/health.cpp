@@ -2,6 +2,7 @@
 
 #include <esp_timer.h>
 
+#include "display.h"
 #include "netmgr.h"
 #include "relay.h"
 #include "uplink.h"
@@ -34,5 +35,6 @@ void toJson(JsonObject out) {
   out["last_job_id"] = printer.lastJobId;
   out["last_job_state"] = printer.lastJobState;
   out["last_job_error"] = printer.lastJobError;
+  out["display"] = display::status();  // Additive to schema 1: "ok" or "absent".
 }
 }  // namespace health

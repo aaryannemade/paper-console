@@ -180,7 +180,12 @@ Authorization: Bearer <token>
 | `active_job_id` | Job the device is currently processing, if any. |
 
 Response: `{"heartbeat_interval_s": 10, "heartbeat_timeout_s": 30,
-"channels_hash": "3f1c9a0b7d2e4c61"}`. Send a
+"channels_hash": "3f1c9a0b7d2e4c61", "clock": {"utc_offset_s": 3600,
+"time_format": "24h"}}`. `clock` gives the configured timezone's current UTC
+offset (DST applied at send time) and the `12h`/`24h` preference for a device
+display; the device takes UTC itself from NTP and adds the offset, so timezone
+and DST changes arrive within one heartbeat. Older containers omit `clock`
+(the reference firmware then shows no time). Send a
 heartbeat at that interval, and immediately after boot, after reconnecting WiFi
 and whenever `printer.state` changes. The container considers the device offline
 after `heartbeat_timeout_s` without one, or as soon as a push to `callback_url`
@@ -368,7 +373,9 @@ Fields: `schema_version: 1`, `device_id`, `boot_id`, `firmware`, `uptime_s`,
 `wifi_connected`, `server_state` (`connected`, `disconnected`, `unknown`),
 `server_detail`, `server_last_ok_s` (-1 means never), `uart_ready`,
 `physical_printer` (always `unknown`), `active_job_id`, `active_job_state`,
-`last_job_id`, `last_job_state`, `last_job_error`. Empty job strings mean none.
+`last_job_id`, `last_job_state`, `last_job_error`, and optional `display` (`ok`,
+or `absent` when no OLED answered at boot; added within schema 1, omitted by
+older firmware). Empty job strings mean none.
 Jobs include local test prints. Last outcome is RAM-only and clears on reboot.
 Uptime uses the 64-bit ESP timer rather than the wrapping Arduino millisecond counter.
 

@@ -1,9 +1,9 @@
 # Combined firmware hardware acceptance
 
-Status: **passed on real XIAO ESP32S3 and printer** (date of run: 2026-10-17,
-tester: aaryan). Covers implemented channel metadata/boot position,
-health/status and encoder reset changes together. OLED and browser flashing
-have separate acceptance once implemented.
+Status: **passed on real XIAO ESP32S3 and printer** (reported by the project
+owner on 2026-10-18). Covers implemented channel metadata/boot position,
+health/status, encoder reset and OLED display changes. Firmware is flashed
+from the terminal (`just fw-flash`); there is no browser flasher.
 
 Recorded results, attached logs, and any caveats live in the **Results** section
 at the end of this file.
@@ -80,31 +80,38 @@ at the end of this file.
 - [x] Complete captive setup again; health reconnects and printing works.
 - [x] BOOT held five seconds performs the same reset as the encoder sequence.
 
+## OLED display (Step 7)
+
+SSD1306 128×64 on SDA = D4/GPIO5, SCL = D5/GPIO6, 3V3.
+
+- [x] Boot log shows `[display] SSD1306 at 0x3C` (or 0x3D); `/health` and both
+      status pages report the display as connected. Unplugged: `absent`, and
+      the relay otherwise behaves as before.
+- [x] Each knob detent shows the new channel within ~0.1 s for 3 s: name when
+      set (short, two-line, 24-character and accented names; unsupported
+      characters as `?`), large number when unnamed, position dots correct.
+      Renaming in settings updates the screen after the next heartbeat.
+- [x] Turning during a long receipt stays responsive and returns to the
+      printing screen; the printing screen shows for server, button and
+      test-page prints and clears when the job ends or is cancelled.
+- [x] Fresh/erased device and the 30 s fallback AP both show WiFi setup with
+      the correct `PaperConsole-XXXXXX` name and 192.168.4.1.
+- [x] WiFi off: "No WiFi". Backend stopped: "Server offline" with the link
+      detail. Wrong token: the 401 detail. Recovery returns to the clock.
+- [x] Idle clock matches the server timezone; switching timezone and 12h/24h
+      in settings updates within one heartbeat. Before NTP/server sync it shows
+      `--:--`. WiFi bars track signal (e.g. move the device away).
+- [x] Clock position shifts slightly each minute; display dims after 60 s
+      idle and brightens on any knob/button input or screen change.
+- [x] Reset sequence shows each step and "Resetting" before restarting;
+      cancelling returns to the normal screen. BOOT 5 s also shows
+      "Resetting".
+
 ## Results
 
-All checks in this file passed on the real XIAO ESP32S3 and the production
-printer using the firmware in the commit under test. Tested end-to-end: boot
-starts on channel 1 with fresh health; channel renames and the Unicode/24-char
-limits propagate to the device page; detent-based selection matches prints
-across all eight positions including during a long receipt and after a backend
-restart. `/health` returns schema 1 with no token, password or server URL;
-job routes still require the bearer token. Both the ESP32 page and server
-Printer Settings show ready/UART ready online, printing during jobs, and
-disconnected/timeout values when the link is interrupted; physical printer
-status stays explicitly unknown and never claims paper or power. Hold-to-cancel
-stops at a record boundary without later Quick Actions, and the hold_cancel
-gesture releases the reservation immediately. Backend, WiFi, and mid-job ESP32
-restarts recover without duplicate output or replayed input. The production
-container with its bind mount persists settings, password and Adventure saves
-and the relay reconnects after recreation.
-
-The encoder reset sequence, including the BOOT short-cut, erases settings and
-starts the captive AP only after the full hold → clockwise → anticlockwise →
-click path; wrong direction, early click, final long press and the per-step
-timeout each cancel cleanly. Short click, normal five-second Quick Actions
-hold and hold-to-cancel all still work. After captive setup again, health
-reconnects and printing returns.
-
-No issues were found that need a follow-up commit. Stale-data handling, latency
-during long receipts, and the readiness-vs-physical output distinction all
-behaved as designed.
+2026-10-18: the project owner ran every item above on the real XIAO ESP32S3 and
+printer and reported that all of them passed in real-world use. The OLED
+section was tested afterwards the same day, after correcting swapped SDA/SCL
+wires and removing the channel screen header bar; it also passed. No failures or
+follow-up issues were reported. Per-item latency figures and logs were not
+recorded.

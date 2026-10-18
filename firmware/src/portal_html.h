@@ -58,7 +58,7 @@ h+=row('WiFi',s.wifi_connected?esc(s.ssid)+' &middot; '+esc(s.ip):(s.ssid?'conne
 if(s.ap_active)h+=row('Setup network',esc(s.ap_ssid)+' &middot; '+esc(s.ap_ip));
 h+=row('Server',s.server?esc(s.server):'not set',s.server?'':'bad');
 h+=row('Link',esc(s.link.message)+(s.link.last_ok_s>=0&&!s.link.ok?' (last ok '+s.link.last_ok_s+' s ago)':''),s.link.ok?'ok':'bad');
-h+=row('UART',health.uart_ready?'Ready (9600 baud)':'Unavailable',health.uart_ready?'ok':'bad');
+h+=row('UART',health.uart_ready?'Ready (9600 baud)':'Unavailable',health.uart_ready?'ok':'bad');if(health.display)h+=row('Display',health.display==='ok'?'OLED connected':'Not detected',health.display==='ok'?'ok':'');
 h+=row('Active job',esc(health.active_job_state)+(health.active_job_id?' &middot; '+esc(health.active_job_id):'None'));
 h+=row('Last job',esc(s.printer.last_job));
 h+=row('Channel',s.channel.position+(s.channel.name?' &middot; '+esc(s.channel.name):''));

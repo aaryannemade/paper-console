@@ -25,6 +25,13 @@ namespace inputs {
 
 void begin();
 int currentPosition();
+// millis() of the last channel change by the knob (0 = none since boot).
+uint32_t lastTurnMs();
+// millis() of the last knob/button activity of any kind (for display wake).
+uint32_t lastActivityMs();
+// Reset sequence step for the display: 0 idle, 1 armed (turn clockwise),
+// 2 turn anticlockwise, 3 click to reset.
+int resetStep();
 // Prints queued "[input] ..." log lines; call from the Arduino loop.
 void loop();
 // Current state and counters for /ui/inputs.

@@ -152,3 +152,18 @@ def test_channel_overview_shows_names(isolated_settings, monkeypatch):
     assert ("body", "3 Spare") in lines
     assert ("caption", "  (empty)") in lines
     assert ("caption", "4: (empty)") in lines
+
+
+def test_heartbeat_clock_follows_timezone_and_format(isolated_settings, monkeypatch):
+    import app.relay_link as relay_link
+
+    monkeypatch.setattr(config, "settings", main.settings)
+    main.settings.timezone = "Asia/Kolkata"
+    main.settings.time_format = "24h"
+    assert relay_link.device_clock() == {"utc_offset_s": 19800, "time_format": "24h"}
+    main.settings.timezone = "UTC"
+    main.settings.time_format = "12h"
+    assert relay_link.device_clock() == {"utc_offset_s": 0, "time_format": "12h"}
+    # Invalid zone (bypassing validation) falls back to UTC instead of failing.
+    object.__setattr__(main.settings, "timezone", "Not/AZone")
+    assert relay_link.device_clock()["utc_offset_s"] == 0

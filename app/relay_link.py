@@ -83,6 +83,8 @@ class DeviceHealth(BaseModel):
     last_job_id: str = Field(default="", max_length=64)
     last_job_state: str = Field(default="", max_length=16)
     last_job_error: str = Field(default="", max_length=300)
+    # Additive to schema 1; older firmware omits it.
+    display: Optional[Literal["ok", "absent"]] = None
 
 
 class Heartbeat(BaseModel):
@@ -393,12 +395,33 @@ def channel_names_hash(names: Optional[list] = None) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def device_clock() -> dict:
+    """Local-time hints for the device's display clock (UTC comes from NTP).
+
+    `utc_offset_s` is the configured timezone's current offset, so the device
+    picks up DST changes and timezone edits within one heartbeat.
+    """
+    import app.config as config
+    from zoneinfo import ZoneInfo
+
+    try:
+        tz = ZoneInfo(config.settings.timezone)
+    except Exception:
+        tz = timezone.utc
+    offset = datetime.now(tz).utcoffset()
+    return {
+        "utc_offset_s": int(offset.total_seconds()) if offset else 0,
+        "time_format": "24h" if config.settings.time_format == "24h" else "12h",
+    }
+
+
 @router.post("/api/device/heartbeat", dependencies=[Depends(require_relay_token)])
 def post_heartbeat(heartbeat: Heartbeat):
     """Device identity, callback URL, printer state and limits; send every interval."""
     reply = link.record_heartbeat(heartbeat)
     # The device fetches /api/device/channels when this differs from its copy.
     reply["channels_hash"] = channel_names_hash()
+    reply["clock"] = device_clock()
     return reply
 
 
