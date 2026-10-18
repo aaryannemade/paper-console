@@ -12,7 +12,7 @@ bitmap, but uses streaming `GS v 0` commands and no UART baud rate for native US
 | --- | --- |
 | UART | Dedicated hardware UART (UART1/2), **9600 8N1**, no RTS/CTS. Do not share boot/log console pins. |
 | TX / RX | ESP32 TX to printer RX; printer TX to ESP32 RX. Check printer TX voltage first: ESP32 GPIO is **not 5 V tolerant**. |
-| Busy (DTR) | Optional GPIO input; **1 = busy**. Do not block indefinitely when asserted. |
+| Busy (DTR) | Optional GPIO input; **1 = busy**. Do not block indefinitely when asserted. **Not wired or read by the reference firmware.** |
 | Ground and power | Common ground; independent 5 V printer supply rated for ≥4–5 A peak. |
 | Paper | 58 mm, 384 dots wide at 203 dpi (48 bytes per raster row). |
 
@@ -54,7 +54,8 @@ GS * x y                       GS / 0 (print at normal size)
 - Write in ~128-byte chunks and wait for the UART to drain at each band
   boundary. If DTR reads 1, wait 10 ms, then poll every 5 ms until it clears.
   After 15 s of DTR asserted, record an incident and stop consulting DTR for
-  the rest of that receipt. If DTR is not wired, skip it.
+  the rest of that receipt. If DTR is not wired (as in the reference build),
+  skip it; paper-out and power are then unknown to the relay.
 - Cancel **between complete records**, never inside a raster command. A partial
   command leaves the printer interpreting pixel bytes as instructions.
 - At 9600 baud (~960 bytes/s), a 64-row band is 3079 printer bytes (~3.2 s);
@@ -75,8 +76,8 @@ for deterministic raster QA.
 An identical 384x432 calibration bitmap printed normally over native USB stayed
 square, whereas UART at 9600 baud and USB paced at 960 bytes/s both produced
 vertical elongation and a lighter checkerboard. This isolates slow delivery as
-a trigger; the printer's internal cause is not yet established. Do not change
-heat settings or compensate image geometry on that evidence alone.
+a trigger. The printer's internal cause was not established; 64-row downloaded
+bands (below) avoid it, so heat settings and image geometry stay unchanged.
 
 `testing/print_raster_calibration.py` reuses the saved calibration PNG across
 outputs. Its `--encoding downloaded` mode uses `GS *` to define
@@ -90,8 +91,8 @@ record; no flash writes, baud changes or heat overrides are used.
   not a validated device capacity; the exact reason for failure is unknown.
 - 64-row bands also worked over the real ESP32 UART. The user measured both
   native-USB and ESP32 calibration squares at **24x24 mm with calipers**.
-- Pauses can still leave seams in dithered/grey areas; the user accepted this
-  tradeoff. Solid black did not show visible seams in their tests.
+- Pauses can still leave seams in dithered/grey areas; this is an accepted
+  limitation. Solid black did not show visible seams in testing.
 
 64 rows is now the normal ESP32 format. No firmware update is required: it
 already forwards opaque records and its 8192-byte chunk limit fits these bands.

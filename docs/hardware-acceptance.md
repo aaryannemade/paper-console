@@ -2,7 +2,7 @@
 
 Status: **passed on real XIAO ESP32S3 and printer** (reported by the project
 owner on 2026-10-18). Covers implemented channel metadata/boot position,
-health/status, encoder reset and OLED display changes. Firmware is flashed
+health/status, encoder reset, OLED display and menu display changes. Firmware is flashed
 from the terminal (`just fw-flash`); there is no browser flasher.
 
 Recorded results, attached logs, and any caveats live in the **Results** section
@@ -107,11 +107,27 @@ SSD1306 128×64 on SDA = D4/GPIO5, SCL = D5/GPIO6, 3V3.
       cancelling returns to the normal screen. BOOT 5 s also shows
       "Resetting".
 
+## Menus on the OLED (Step 11)
+
+- [x] Hold 5 s and release: after the Quick Actions receipt, the OLED shows
+      "Quick actions" with the option under the knob (Table of contents, System
+      monitor, Cancel) and "Nothing here" on 3–7; pressing an empty position
+      does nothing; the receipt has no `Dial:` line.
+- [x] Choosing an option or Cancel closes the menu; the OLED returns to the
+      clock and turning shows channel names again.
+- [x] Leaving Quick Actions open for 2 minutes closes it without printing.
+- [x] A channel with two interactive modules shows "Select app" with their
+      names; Adventure shows its choice text, and "Save & exit" on 8.
+- [x] Restart the relay while a menu is open: after reconnecting the OLED
+      shows the menu again (heartbeat), and `[menu]` lines appear in the log.
+
 ## Results
 
 2026-10-18: the project owner ran every item above on the real XIAO ESP32S3 and
 printer and reported that all of them passed in real-world use. The OLED
 section was tested afterwards the same day, after correcting swapped SDA/SCL
-wires and removing the channel screen header bar; it also passed. No failures or
+wires and removing the channel screen header bar; it also passed. The menus on
+the OLED section was added with the final Quick Actions/menu changes and passed
+in the project owner's test the same day. No failures or
 follow-up issues were reported. Per-item latency figures and logs were not
 recorded.

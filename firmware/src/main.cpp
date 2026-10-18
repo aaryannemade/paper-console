@@ -9,6 +9,7 @@
 #include "display.h"
 #include "events.h"
 #include "inputs.h"
+#include "menu.h"
 #include "netmgr.h"
 #include "relay.h"
 #include "settings.h"
@@ -32,6 +33,7 @@ void setup() {
                 static_cast<unsigned>(ESP.getPsramSize() / 1024), static_cast<int>(esp_reset_reason()));
 
   channels::begin();
+  menu::begin();
   events::begin();
   inputs::begin();
   netmgr::begin();

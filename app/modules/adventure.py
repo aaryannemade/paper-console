@@ -128,18 +128,23 @@ def _enter_adventure_selection(module_id: str, printer):
     story = load_story()
     current_node = get_node(story, state.current_node)
     if current_node and current_node.get("ending"):
-        valid_positions = {1, 8}
+        labels = {1: "Start over", 8: "Exit"}
     elif current_node:
         choices = filter_choices(current_node.get("choices", []), state)
-        valid_positions = {choice.get("dial", idx) for idx, choice in enumerate(choices, 1)}
-        valid_positions.add(8)
+        labels = {
+            choice.get("dial", idx): choice.get("text", f"Choice {idx}")
+            for idx, choice in enumerate(choices, 1)
+        }
+        labels[8] = "Save & exit"
     else:
-        valid_positions = {8}
+        labels = {8: "Exit"}
 
     enter_selection_mode(
         lambda pos: process_choice(module_id, pos, printer),
         module_id,
-        valid_positions=valid_positions,
+        valid_positions=set(labels),
+        title="Adventure",
+        labels=labels,
     )
 
 

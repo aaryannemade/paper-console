@@ -2,8 +2,9 @@
 //
 // Drawn by a low-priority task that only reads cached state, so it never
 // delays printing, input sampling or HTTP. Screens, highest priority first:
-//   reset sequence step  >  channel (3 s after a knob turn)  >  WiFi setup AP
-//   >  printing  >  disconnected / connecting  >  idle clock + WiFi signal.
+//   reset sequence step  >  channel, or the open menu's option (3 s after a
+//   knob turn)  >  WiFi setup AP  >  printing  >  disconnected / connecting
+//   >  open menu (menu.h)  >  idle clock + WiFi signal.
 // The idle clock moves a few pixels every minute (burn-in), and the panel
 // dims after a minute without input or a screen change. If no display
 // answers at boot the firmware runs without one.

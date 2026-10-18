@@ -2,12 +2,12 @@
 
 **A small, self-hosted thermal printer for news, weather, puzzles, email, and more.**
 
-> This fork is migrating to a container + ESP32-S3 architecture. The server
-> handles application logic and pushes print commands over HTTP. The ESP32-S3
-> firmware will provision WiFi, relay physical inputs, and drive a CSN-A2 printer
-> over TTL UART. The server-side relay works with the simulator and the server
-> has a container image; firmware is still planned for Step 6. See the
-> [migration plan](docs/container-esp32-plan.md).
+> This fork runs as a **container + ESP32-S3** system. The container serves the
+> settings UI and API, renders every receipt and decides what inputs mean. A
+> Seeed XIAO ESP32S3 provisions WiFi (captive portal), relays the rotary
+> encoder/button, shows the channel, menus and a clock on an optional OLED, and
+> writes the receipts it is sent to a CSN-A2 thermal printer over TTL UART. See
+> [the migration plan](docs/container-esp32-plan.md) for design history.
 
 ---
 
@@ -19,7 +19,7 @@
 For more information and build photos, visit [travismiller.design/paper-console](https://travismiller.design/paper-console).
 
 ![PC-1 Front View](images/pc-1_front2.jpg)
-*Original hardware prototype; ESP32-S3 hardware and wiring are planned for Step 6.*
+*Original hardware prototype. This fork's ESP32-S3 wiring is in [Printer and Device](#5-printer-and-device).*
 
 ---
 
@@ -45,23 +45,42 @@ simulator. API docs are available at [http://localhost:8000/docs](http://localho
 ### First Use (This Fork)
 
 The container does not manage WiFi, run a captive portal, or print setup
-receipts. Network onboarding moves to the ESP32-S3 firmware (captive portal and
-link-status UI), which is not implemented yet.
+receipts; the ESP32-S3 handles network onboarding.
 
-1. Start the server with `PC1_DEVICE_PASSWORD` set (see the development section below).
+1. Start the server (or [container](#container-deployment)) with
+   `PC1_RELAY_TOKEN` and optionally `PC1_DEVICE_PASSWORD` set.
 2. Open the settings UI and log in with that password.
-3. Configure channels, modules, and schedules.
+3. Flash the relay (`just fw-flash`), join its `PaperConsole-XXXXXX` WiFi network
+   and enter your WiFi, the server URL and the same relay token
+   ([setup](#esp32-s3-relay-firmware-firmware)).
+4. Configure channels, modules, and schedules.
 
-**Physical controls** are relayed by the ESP32 as HTTP input events (see
-[the relay protocol](docs/relay-protocol.md)); the firmware is not written yet, so
-use `just device ...` to send the same events during development.
+### Using the controls
 
-- Select a channel (1-8); press the button to print it.
-- Hold ~5 seconds, then release, for **Quick Actions**:
-  - `1` Table of Contents
-  - `2` System Monitor
-  - `8` Cancel
-- Quick Actions are single-shot and auto-exit after 2 minutes without a choice.
+The knob selects one of 8 channels (one detent per step, wrapping 8 → 1;
+always channel 1 after power-up). The OLED shows the channel's name, or its
+number if unnamed, for 3 seconds after each turn, then returns to the clock.
+
+| Action | Result |
+| --- | --- |
+| Press | Print the selected channel. While a menu is open: choose the option under the knob. |
+| Hold 5 s while printing | Cancel the receipt (it stops at the next 64-row band, up to ~3 s). |
+| Hold 5 s, then release | A short paper feed at 5 s means "release now"; then the **Quick Actions** menu prints and opens. |
+| Hold 10 s, then clockwise, anticlockwise, click | Erase the relay's WiFi/server/token settings (see [reset sequence](#esp32-s3-relay-firmware-firmware)). |
+
+**Menus** (Quick Actions; "Select app" on a channel with several interactive
+modules; Adventure choices) print their options and stay open until you choose
+one. While open, the OLED shows the menu title and the option under the knob
+("Nothing here" on empty positions, which do nothing when pressed); the dots
+along the bottom mark which positions are options. Position 8 is always Cancel
+or Exit.
+
+- Quick Actions: `1` Table of contents (channel list), `2` System monitor,
+  `8` Cancel. Closes silently after 2 minutes without a choice.
+- Holding 5 s while a menu is open reopens Quick Actions instead.
+
+Without hardware, `just device ...` sends the same input events (see
+[the relay protocol](docs/relay-protocol.md#development)).
 
 To start over, stop the stack and clear the **dedicated host directory** mounted
 as `/data`, then start it again. This removes saved settings, Adventure progress
@@ -223,7 +242,7 @@ update the package list in `flake.nix` as well.
 The settings UI screenshot helper has an additional Playwright/browser setup
 requirement; browser binaries are not included in this development shell.
 
-### Container deployment (Step 4)
+### Container deployment
 
 The multi-stage `Dockerfile` builds the React UI with Node.js 26.12.0/npm 12.2.0
 and runs FastAPI on Python 3.14.7 (Debian Trixie, pip 26.2.1)
@@ -313,8 +332,8 @@ or the server address after running `just frontend-build`.
   it (e.g. "Work update"; single line, up to 24 characters; Enter or clicking
   away saves, Escape cancels, empty clears). Names move with the channel when
   swapped, appear on the Quick Actions channel list, are included in settings
-  export/import, and are set with `PUT /api/channels/{position}/name`
-  (`{"name": "..."}`). They are intended for a future ESP32 display.
+  export/import, are set with `PUT /api/channels/{position}/name`
+  (`{"name": "..."}`), and are shown on the relay's OLED and status page.
 * **Modular System:** Channels are containers. You can assign **multiple modules** to a single channel (e.g., "News" followed by "Weather" followed by "Sudoku")
 * **Reordering:** 
   * **Channels:** Use Up/Down arrows next to Channel title to swap entire channels
@@ -391,7 +410,8 @@ replacing the image and keeping the `/data` bind mount.
 
 ### Tech Stack
 * **OS:** Linux server (container) or development host
-* **Backend:** Python 3.12 + FastAPI
+* **Backend:** Python 3.14 + FastAPI
+* **Device:** Seeed XIAO ESP32S3, PlatformIO/Arduino (`firmware/`)
 * **Frontend:** React + Vite + Tailwind CSS v4
 
 ### Directory Structure
@@ -407,17 +427,18 @@ paper-console/
 │   ├── hardware.py             # Printer reservation and channel position
 │   ├── location_lookup.py      # City/timezone lookup helpers
 │   ├── module_registry.py      # @register_module metadata and validation
-│   ├── selection_mode.py       # Position-driven interactive selection flows
+│   ├── selection_mode.py       # Menus (selection mode) and their display labels
 │   ├── device_input.py         # ESP32 input events: position + button gestures
 │   ├── relay_auth.py           # Shared container/ESP32 bearer token
-│   ├── relay_link.py           # ESP32 heartbeat, link status, job status
+│   ├── relay_link.py           # ESP32 heartbeat, link status, job status, menu push
 │   ├── qr_payloads.py          # QR content encoders (WiFi/contact QR modules)
 │   ├── utils.py
 │   ├── data/                   # Bundled offline content and lookup datasets
 │   ├── drivers/
 │   │   ├── printer_raster.py   # Receipt renderer (bitmap for every output)
 │   │   ├── print_outputs.py    # Output selection and console capture
-│   │   ├── usb_serial_output.py # USB-serial printer output (dev only)
+│   │   ├── usb_serial_output.py # USB printer output (dev only)
+│   │   ├── usb_bulk_printer.py # Native USB printer-class endpoint (PyUSB)
 │   │   ├── esp32_relay_output.py # ESP32 relay output (production)
 │   │   ├── escpos.py           # CSN-A2 command encoding (raster strips, feeds)
 │   │   └── printer_mock.py     # [PRINT] text echo for console output and tests
@@ -442,6 +463,9 @@ paper-console/
 │   │   ├── webhook.py
 │   │   ├── wordsearch.py
 │   │   └── wotd.py
+├── firmware/                   # XIAO ESP32S3 relay (PlatformIO)
+│   ├── platformio.ini          # Board, pins and build flags
+│   └── src/                    # WiFi/portal, relay jobs, inputs, OLED, health
 ├── web/                        # React + Vite + Tailwind settings UI
 │   ├── src/                    # Settings UI, shared constants/styles
 │   ├── public/                 # Static icons/assets
@@ -456,7 +480,7 @@ paper-console/
 │   ├── relay_simulator.py      # ESP32 reference device for local tests
 │   ├── device_event.py         # Local ESP32 input-event client
 │   └── artifacts/
-├── docs/                       # Relay protocol and container/ESP32 plan
+├── docs/                       # Relay protocol, UART reference, scheduling, hardware tests
 ├── icons/                      # Icon source assets
 ├── images/                     # Product photos used in the README
 ├── .github/workflows/          # docker-image.yml: builds and publishes the image
@@ -562,8 +586,9 @@ name on its status page and the OLED.
 | SDA / SCL | D4 (GPIO5) / D5 (GPIO6) |
 
 It shows the channel name (or number if unnamed) for 3 s after each knob turn,
-the setup network while the captive portal runs, printing, and no-WiFi /
-server-offline states; otherwise a clock with WiFi signal bars top right. The
+the open menu and the option under the knob, the setup network while the
+captive portal runs, printing, and no-WiFi / server-offline states; otherwise
+a clock with WiFi signal bars top right. The
 clock takes UTC from NTP (`pool.ntp.org`, so the network needs internet access)
 and the timezone offset and 12h/24h format from the server's settings via the
 heartbeat reply. The reset sequence steps also appear on screen. The idle clock
@@ -613,6 +638,33 @@ just device position 3 && just device press      # print channel 3 via the relay
 
 ---
 
+### Known limitations
+
+These were measured on the hardware and accepted:
+
+- **Throughput:** the printer UART runs at 9600 baud (~960 bytes/s). A 64-row
+  band is ~3 KB (~3.2 s), so a 500-row receipt takes ~26 s to send. Heat and
+  density settings are left at the printer's defaults.
+- **Band seams:** receipts are sent as 64-row bitmap bands; the short pause
+  between bands can leave faint seams in dithered/grey areas (solid black is
+  unaffected).
+- **Cancel latency:** cancelling stops at the next band boundary, up to ~3 s
+  after the 5 s hold.
+- **Physical printer state is unknown:** paper-out, power and busy signals are
+  not wired or queried. "Ready" and a completed job mean the bytes left the
+  UART, not that paper was printed.
+- **No offline queue:** when the relay is unreachable, prints are skipped and
+  logged, never replayed later. A job interrupted by a relay restart fails.
+- **One relay per network** (mDNS name `paper-console.local`) and one Uvicorn
+  worker (scheduling and printer reservations are process-local).
+- **Clock:** needs internet access for NTP; the OLED shows `--:--` until NTP
+  and the first heartbeat have arrived. Channel names and menus use Latin
+  fonts; other characters show as `?`.
+- **Relay settings page has no login:** anyone on the network can change WiFi,
+  server and token (the token is never displayed).
+
+---
+
 ## 6. Troubleshooting
 
 ### Printer Issues
@@ -630,6 +682,22 @@ just device position 3 && just device press      # print channel 3 via the relay
   (usually the `dialout` group).
 * **No output in development:** Start with `PC1_PRINTER_OUTPUT=console just backend`
   and watch the `[PRINT]` and `[RECEIPT]` log entries.
+
+### Relay and OLED
+* **Relay log:** `just fw-monitor` shows `[wifi]`, `[link]`, `[input]`,
+  `[event]`, `[menu]`, `[display]` and `[time]` lines.
+* **OLED blank / "no SSD1306":** the boot log scans the bus. "With SDA/SCL
+  swapped: 0x3c" means the two wires are crossed (SDA must go to D4, SCL to
+  D5); the firmware then uses them as wired. Upside down: `PC1_OLED_ROTATION=2`.
+  A 1.3" module is usually an SH1106, not an SSD1306, and needs a different
+  driver.
+* **Clock shows `--:--`:** the relay has no NTP time (no internet access) or no
+  heartbeat reply from the server yet.
+* **Knob shows channel names but the press picks a menu option:** the relay
+  missed a menu update; it catches up within one heartbeat (10 s). Check
+  `[menu]` lines in the relay log.
+* **Link shows "server rejected the relay token (401)":** the relay and
+  `PC1_RELAY_TOKEN` differ; re-enter the token on the relay page.
 
 ### Server Issues
 * **Port in use:** Stop the process already bound to the port, or supply a

@@ -642,10 +642,13 @@ def _write_channel_overview_compact():
             printer.print_caption(f"{label}: (empty)")
 
 
+QUICK_ACTION_LABELS = {1: "Table of contents", 2: "System monitor", 8: "Cancel"}
+QUICK_ACTIONS_TIMEOUT_SECONDS = 120
+
+
 def _write_long_press_menu_compact(position: int):
     """Write long-press quick action menu in compact format (no reset/flush)."""
     printer.print_header("QUICK ACTIONS", icon="settings")
-    printer.print_caption(f"Dial: {position}")
     printer.print_body("[1] Table of contents")
     printer.print_body("[2] System monitor")
     printer.print_caption("[8] Cancel")
@@ -743,35 +746,27 @@ async def long_press_menu_trigger():
     enter_selection_mode(
         _handle_quick_action,
         quick_actions_id,
-        valid_positions={1, 2, 8},
+        valid_positions=set(QUICK_ACTION_LABELS),
+        title="Quick actions",
+        labels=QUICK_ACTION_LABELS,
     )
     # Release lock only after quick-actions selection mode is fully active.
     clear_print_reservation(clear_hold=False)
 
     async def _auto_exit_quick_actions_after_timeout(module_id: str):
-        """Auto-exit quick actions if no selection is made within timeout."""
+        """Close quick actions silently if nothing is chosen within the timeout."""
         from app.selection_mode import is_selection_mode_active, get_current_module_id
 
-        await asyncio.sleep(120)
+        await asyncio.sleep(QUICK_ACTIONS_TIMEOUT_SECONDS)
 
         if not is_selection_mode_active():
             return
         if get_current_module_id() != module_id:
             return
 
-        # Still in this quick-actions session after timeout: exit with a brief hint.
+        # No receipt: the device display returns to normal when the menu closes.
+        logger.info("Quick actions closed after %s s without a choice", QUICK_ACTIONS_TIMEOUT_SECONDS)
         exit_selection_mode()
-        from app.hardware import printer as hw_printer
-
-        if hasattr(hw_printer, "reset_buffer"):
-            max_lines = getattr(settings, "max_print_lines", 200)
-            hw_printer.reset_buffer(max_lines)
-        hw_printer.print_header("QUICK ACTIONS", icon="settings")
-        hw_printer.print_caption("No action selected.")
-        hw_printer.print_caption("Menu timed out after 2 min.")
-        hw_printer.feed(1)
-        if hasattr(hw_printer, "flush_buffer"):
-            hw_printer.flush_buffer()
 
     asyncio.create_task(_auto_exit_quick_actions_after_timeout(quick_actions_id))
 
@@ -1771,12 +1766,14 @@ async def trigger_channel(position: int, *, scheduled: bool = False):
 
             # Register the callback
             # We use a special ID to indicate this is the channel meta-menu
-            valid_positions = set(range(1, min(len(interactive_modules), 7) + 1))
-            valid_positions.add(8)
+            labels = {i: m.name for i, m in enumerate(interactive_modules[:7], 1)}
+            labels[8] = "Cancel"
             enter_selection_mode(
                 handle_app_selection,
                 f"channel-menu-{position}",
-                valid_positions=valid_positions,
+                valid_positions=set(labels),
+                title="Select app",
+                labels=labels,
             )
 
             # Return early since we've handled the printing/logic

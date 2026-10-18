@@ -9,6 +9,7 @@
 
 #include "channels.h"
 #include "health.h"
+#include "menu.h"
 #include "relay.h"
 #include "settings.h"
 #include "timekeeping.h"
@@ -87,6 +88,9 @@ uint32_t sendHeartbeat() {
         // Plausible offsets only (UTC-14 .. UTC+14).
         int32_t offset = constrain(clock["utc_offset_s"].as<int32_t>(), -14 * 3600, 14 * 3600);
         timekeeping::setZone(offset, String(clock["time_format"] | "12h") == "24h");
+      }
+      if (!reply["menu"].isNull()) {
+        menu::apply(reply["menu"].as<JsonVariantConst>(), "heartbeat");
       }
     }
     intervalS = constrain(intervalS, 2u, 30u);

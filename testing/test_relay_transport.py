@@ -614,3 +614,50 @@ def test_heartbeat_reports_display_and_returns_clock(make_sim):
     assert relay_link.link.snapshot()["health"]["display"] == "absent"
     # Older firmware without the field still validates.
     assert relay_link.DeviceHealth.model_validate({**sim.health(), "display": None}).display is None
+
+
+# --- device menu display -------------------------------------------------------
+
+
+def test_menu_is_pushed_on_open_and_close(make_sim):
+    sim = make_sim()
+    try:
+        selection_mode.enter_selection_mode(
+            lambda pos: None, "test-menu", valid_positions={1, 2, 8},
+            title="Quick actions", labels={1: "Table of contents", 2: "System monitor", 8: "Cancel"},
+        )
+        assert sim.wait_for(lambda: (sim.menu or {}).get("active"))
+        assert sim.menu["title"] == "Quick actions"
+        assert sim.menu["options"] == [
+            {"position": 1, "label": "Table of contents"},
+            {"position": 2, "label": "System monitor"},
+            {"position": 8, "label": "Cancel"},
+        ]
+        assert "push" in sim.menu_updates
+        opened_seq = sim.menu["seq"]
+
+        selection_mode.exit_selection_mode()
+        assert sim.wait_for(lambda: sim.menu and not sim.menu["active"])
+        assert sim.menu["seq"] > opened_seq
+        # A heartbeat repeats the current state; an equal seq changes nothing.
+        updates = len(sim.menu_updates)
+        sim.send_heartbeat()
+        assert len(sim.menu_updates) == updates and not sim.menu["active"]
+    finally:
+        selection_mode.exit_selection_mode()
+
+
+def test_heartbeat_delivers_menu_after_device_reboot(make_sim, monkeypatch):
+    sim = make_sim()
+    # Pushes lost (e.g. device rebooting): the heartbeat reply still delivers it.
+    monkeypatch.setattr(relay_link.menu_pusher, "_send", lambda snapshot: None)
+    try:
+        selection_mode.enter_selection_mode(lambda pos: None, "adv", valid_positions={1, 8},
+                                            title="Adventure", labels={1: "Start over", 8: "Exit"})
+        sim.reboot()  # Clears the device copy and sends a heartbeat.
+        assert sim.menu["active"] and sim.menu["title"] == "Adventure"
+        assert sim.menu_updates[-1] == "heartbeat"
+        # An older snapshot (lower seq) never replaces a newer one.
+        assert sim.apply_menu({"seq": sim.menu["seq"] - 1, "active": False}, "push") is False
+    finally:
+        selection_mode.exit_selection_mode()

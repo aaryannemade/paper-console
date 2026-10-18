@@ -1,12 +1,10 @@
 # Container + ESP32-S3 migration plan
 
-Status: Steps 1–5 (container side) and the core Step 6 firmware are implemented.
-WiFi printing, physical encoder/button input and corrected raster geometry have
-been verified on the XIAO ESP32S3. Step 6 hardware acceptance is still partial;
-Steps 7, 9 and 10 (OLED channel display, device health and the encoder reset
-sequence) are implemented and passed hardware acceptance. Firmware is flashed
-from the terminal (`just fw-flash`); the browser flasher (former Step 8) was
-dropped. Step 11 closes out hardware/container validation.
+Status: **complete (2026-10-18).** Steps 1–7 and 9–11 are implemented and
+passed hardware acceptance on the XIAO ESP32S3 with the CSN-A2 printer and the
+production container ([hardware-acceptance.md](hardware-acceptance.md)).
+Firmware is flashed from the terminal (`just fw-flash`); the browser flasher
+(former Step 8) was dropped.
 Printer UART details are in [printer-uart-reference.md](printer-uart-reference.md).
 
 ## Target
@@ -66,11 +64,11 @@ traffic does not deadlock while the container is pushing a receipt.
 | Area | Main locations | Status / next work |
 | --- | --- | --- |
 | Container packaging | `Dockerfile`, `docker-compose.yaml`, `portainer-compose.yaml`, `app/paths.py` | Multi-stage image, mounted data directory, non-root runtime and health check (Step 4 complete). |
-| ESP32 core (Step 6) | `firmware/`, [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implemented; physical prints/input verified. Failure/recovery, cancellation and scheduling acceptance still pending. |
+| ESP32 core (Step 6) | `firmware/`, [relay-protocol.md](relay-protocol.md), [printer-uart-reference.md](printer-uart-reference.md) | Implemented; prints, input, cancellation, scheduling and failure/recovery passed hardware acceptance 2026-10-18. |
 | Channel indication (Step 7) | `firmware/src/display.cpp`, `timekeeping.cpp`, container channel metadata | Channel names done end to end. SSD1306 OLED screens implemented (channel, setup AP, printing, disconnected, idle clock + WiFi signal); passed hardware acceptance 2026-10-18. |
 | Device health (Step 9) | Firmware HTTP API/UI, container link UI | Implemented; passed hardware acceptance 2026-10-18. |
 | Encoder reset sequence (Step 10) | `firmware/src/inputs.cpp`, `hold_cancel` gesture | Implemented (hold 10 s, clockwise, anticlockwise, click = erase settings); passed hardware acceptance 2026-10-18. |
-| Final acceptance (Step 11) | Real ESP32/printer, container deployment, protocol checks | Validate failure/recovery, scheduling, menus and all new device features. |
+| Final acceptance (Step 11) | Real ESP32/printer, container deployment, protocol checks | Complete 2026-10-18: recovery, scheduling, production container, menus on the OLED and documentation. |
 
 ## Step 1 — Remove WiFi provisioning end to end
 
@@ -191,7 +189,7 @@ shutdown; smoke test a mock print via HTTP from outside the container.
   `nmcli`, `sudo`, `systemctl`, `raspi-config` or `chpasswd`. Application settings
   and credentials remain writable pending the Step 4 mounted-data directory.
 
-## Step 6 — ESP32-S3 firmware (core implemented; acceptance partial)
+## Step 6 — ESP32-S3 firmware (implemented and hardware-tested)
 
 Implemented:
 
@@ -247,10 +245,8 @@ Hardware findings and verified results:
   proof of paper output; printer readiness is currently assumed and no DTR
   input or physical paper/offline sensing is implemented.
 
-Still pending: real-device protocol parity checks, cancellation/menu interaction,
-scheduled prints, WiFi/server/device restart recovery and production-container
-end-to-end acceptance. Track these in Step 11; simulator coverage does not count
-as hardware acceptance. Quick Actions UX clarification is also deferred there.
+The remaining acceptance (cancellation, menus, scheduled prints, WiFi/server/
+device restart recovery and the production container) was completed in Step 11.
 
 ## Step 7 — Show the selected channel (implemented and hardware-tested)
 
@@ -374,15 +370,27 @@ settings intact and the knob working normally. **Passed on real hardware
 2026-10-18 — see [hardware-acceptance.md](hardware-acceptance.md) for the full
 result.**
 
-## Step 11 — Hardware acceptance and migration closeout (in progress)
+## Step 11 — Hardware acceptance and migration closeout (complete)
 
 Use [hardware-acceptance.md](hardware-acceptance.md) as the combined execution
 checklist for the implemented health/status, channel-sync/boot-position,
 encoder-reset and OLED changes. The combined firmware-and-software acceptance
 for Steps 7 (channel names and OLED display), 9 (health/status) and 10
-(encoder reset) passed on real hardware 2026-10-18; see the Results section in that file. Remaining
-items in this step are now scoped to container/scheduler/recovery acceptance
-and final documentation.
+(encoder reset) passed on real hardware 2026-10-18; see the Results section in that file. The
+items below were completed the same day.
+
+Final menu interaction: menus (Quick Actions, "Select app", Adventure) print
+their options and stay open until a choice; the container pushes the open menu
+(`POST /menu`, repeated in every heartbeat reply) and the OLED shows its title,
+the option under the knob or "Nothing here", and the valid positions. Position
+8 cancels/exits. Quick Actions (`1` Table of contents, `2` System monitor, `8`
+Cancel) close silently after 2 minutes; the receipt no longer prints the dial
+position. Holding 5 s during a print cancels it and that press never opens Quick
+Actions.
+
+Protocol edge cases (duplicate creates/chunks/events, backpressure, lost status
+callbacks) are covered by the simulator tests; on hardware, token rejection,
+cancellation, status reporting and restart recovery were exercised directly.
 
 - Exercise the real firmware against the simulator's contract: auth failures,
   duplicate create/chunks/events, ordering/backpressure, status polling fallback,
@@ -406,11 +414,12 @@ and final documentation.
   behaviour; record accepted limits (9600-baud throughput, dithering seams,
   band-boundary cancellation latency and any unverified physical printer state).
 
-Acceptance: record actual hardware results for the above checks, keep backend
-tests and frontend lint/build passing locally (`just test`; the `checks.yml`
-CI workflow was removed), and remove stale "firmware
-planned" statements. The core migration is complete when these results are
-recorded; future display-driven UX extensions can then be planned separately.
+Acceptance: **met 2026-10-18.** Hardware results are recorded in
+[hardware-acceptance.md](hardware-acceptance.md); 375 backend tests, frontend
+lint/build and the firmware build pass locally (`just test`; the `checks.yml`
+CI workflow was removed); stale "firmware planned" statements are gone from the
+README and protocol. Accepted limits are listed under "Known limitations" in
+the README.
 
 Step 1a verification: 313 backend tests pass, including startup/shutdown checks for
 both first and subsequent boots, authentication independent of AP state, and task
@@ -559,6 +568,5 @@ Sudoku print as a non-root user with a read-only root filesystem, configurable
 listener port and healthy Docker image check; settings and generated login
 password both survived container recreation with the same `/data` bind mount.
 
-Current implementation checkpoint: Step 6 core firmware and hardware raster fix
-are complete. Next: Step 7 channel-indication decision, followed by Steps 8–10;
-use Step 11 to collect the remaining acceptance results throughout that work.
+Final checkpoint (2026-10-18): the migration is complete. Further display or
+interaction ideas are new work, not part of this plan.

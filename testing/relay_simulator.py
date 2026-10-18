@@ -127,6 +127,8 @@ class RelaySimulator:
         self.channels_hash = None
         self.channel_fetches = 0
         self.clock = None  # {"utc_offset_s", "time_format"} from the last heartbeat reply
+        self.menu = None  # Open menu for the display (push or heartbeat), RAM only.
+        self.menu_updates = []  # "push"/"heartbeat" per accepted update
         self._stop = threading.Event()
         self._threads = []
         self._session = requests.Session()
@@ -170,6 +172,7 @@ class RelaySimulator:
             self.active = None
             self.channel_names = {}
             self.channels_hash = None
+            self.menu = None
             self.cond.notify_all()
         self.send_heartbeat()
 
@@ -248,7 +251,20 @@ class RelaySimulator:
         self._sync_channel_names(reply.get("channels_hash"))
         # Display clock hints (the firmware takes UTC from NTP and applies these).
         self.clock = reply.get("clock") or self.clock
+        if isinstance(reply.get("menu"), dict):
+            self.apply_menu(reply["menu"], "heartbeat")
         return reply
+
+    def apply_menu(self, menu, source):
+        """Keep the menu with the highest seq, as the firmware's display does."""
+        with self.cond:
+            seq = int(menu.get("seq") or 0)
+            if self.menu is not None and seq <= int(self.menu.get("seq") or 0):
+                return False
+            self.menu = menu
+            self.menu_updates.append(source)
+            self.cond.notify_all()
+        return True
 
     def _sync_channel_names(self, server_hash):
         """Fetch names only when the heartbeat's hash differs from our copy."""
@@ -397,6 +413,13 @@ class RelaySimulator:
                 body = self._body()
                 if self.path == "/jobs":
                     return self._create(body)
+                if self.path == "/menu":
+                    try:
+                        menu = json.loads(body or b"{}")
+                    except ValueError:
+                        return self._send(400, {"error": "invalid json"})
+                    sim.apply_menu(menu, "push")
+                    return self._send(200, {"ok": True})
                 match = JOB_PATH.match(self.path)
                 if match and match.group("rest") == "/cancel":
                     with sim.cond:
@@ -530,8 +553,17 @@ def main():
     try:
         last_error = None
         last_fetches = 0
+        last_menu_seq = None
         while True:
             time.sleep(1)
+            menu = sim.menu or {}
+            if menu.get("seq") != last_menu_seq:
+                last_menu_seq = menu.get("seq")
+                if menu.get("active"):
+                    options = ", ".join(f"{o['position']}={o['label']!r}" for o in menu.get("options", []))
+                    print(f"[SIM] menu {menu.get('title')!r}: {options}", flush=True)
+                elif menu:
+                    print("[SIM] menu closed", flush=True)
             if sim.channel_fetches != last_fetches:
                 last_fetches = sim.channel_fetches
                 names = ", ".join(f"{p}={n!r}" for p, n in sorted(sim.channel_names.items()) if n)

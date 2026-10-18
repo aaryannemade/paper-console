@@ -1,15 +1,17 @@
 # Container ↔ ESP32 relay protocol
 
-Status: **implemented on the container side** (input events in Step 3b;
-heartbeat, print jobs, job status and cancellation in Step 3c). The firmware in
-`firmware/` (Step 6) implements the device side: heartbeats, print jobs, status
-and input events (EC11 rotary encoder with push button). `testing/relay_simulator.py` is a reference
-implementation of the device side and is what the container tests run against.
+Status: **implemented and hardware-tested.** The container side is in
+`app/relay_link.py`, `app/device_input.py` and
+`app/drivers/esp32_relay_output.py`; the XIAO ESP32S3 firmware in `firmware/`
+implements the device side (heartbeats, print jobs, status, input events from an
+EC11 rotary encoder with push button, channel names, menus and the OLED clock).
+`testing/relay_simulator.py` is the reference device implementation that the
+container tests run against; keep firmware, simulator and this document in step.
 
 | Direction | Requests |
 | --- | --- |
 | Device → container | `POST /api/device/heartbeat`, `POST /api/device/events`, `POST /api/device/jobs/{id}/status` |
-| Container → device | `POST /jobs`, `PUT /jobs/{id}/chunks/{n}`, `POST /jobs/{id}/cancel`, `GET /jobs/{id}` |
+| Container → device | `POST /jobs`, `PUT /jobs/{id}/chunks/{n}`, `POST /jobs/{id}/cancel`, `GET /jobs/{id}`, `POST /menu` |
 
 ## Authentication
 
@@ -86,7 +88,7 @@ Unknown fields are ignored. Malformed events get `422`.
 | `press` | Otherwise | `printing_channel` — prints the channel at the current position |
 | `hold` | A print is running | `cancel_requested` — the print stops at the next bitmap-band boundary (up to about 3.2 s at 9600 baud). The rest of this press is ignored. |
 | `hold` | Idle | `hold_ready` — a short paper feed tells the user they can release |
-| `hold_release` | After `hold_ready` | `quick_actions` — prints the Quick Actions menu |
+| `hold_release` | After `hold_ready` | `quick_actions` — prints the Quick Actions menu and opens it (see [Menu display](#menu-display-container--device)); it closes silently after 2 minutes without a choice |
 | `hold_cancel` | Any | `hold_cancelled` — releases the printer reservation armed by `hold` (a running print is unaffected) and ignores any later `hold_release` of this press |
 
 Other results, all with HTTP `200`:
@@ -185,7 +187,8 @@ Response: `{"heartbeat_interval_s": 10, "heartbeat_timeout_s": 30,
 offset (DST applied at send time) and the `12h`/`24h` preference for a device
 display; the device takes UTC itself from NTP and adds the offset, so timezone
 and DST changes arrive within one heartbeat. Older containers omit `clock`
-(the reference firmware then shows no time). Send a
+(the reference firmware then shows no time). `menu` is the open menu, as
+described in [Menu display](#menu-display-container--device). Send a
 heartbeat at that interval, and immediately after boot, after reconnecting WiFi
 and whenever `printer.state` changes. The container considers the device offline
 after `heartbeat_timeout_s` without one, or as soon as a push to `callback_url`
@@ -215,6 +218,47 @@ Store the names together with this `hash` (not the heartbeat's: a name may
 change between the two requests, and the next heartbeat then fetches again).
 On a failed fetch keep the old copy and retry on the next heartbeat. Names are
 UTF-8. A container without this feature omits `channels_hash`; keep no names.
+
+## Menu display (container → device)
+
+While a menu is open (Quick Actions, the "Select app" picker for channels with
+several interactive modules, Adventure choices), a button press chooses the
+option at the current position instead of printing the channel. So that a
+display can show what the knob selects, the container sends the menu state
+whenever a menu opens or closes:
+
+```
+POST /menu
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+```json
+{"seq": 1792345678901234, "active": true, "title": "Quick actions",
+ "options": [{"position": 1, "label": "Table of contents"},
+             {"position": 2, "label": "System monitor"},
+             {"position": 8, "label": "Cancel"}]}
+```
+
+```json
+{"seq": 1792345679000000, "active": false}
+```
+
+- `options` lists only the positions that act; a press elsewhere is
+  `selection_ignored`. Titles are at most 24 characters, labels 48 (UTF-8).
+- `seq` increases on every change and also across container restarts (derived
+  from the wall clock). **Keep a state only if its `seq` is higher than the one
+  held**, so an older copy can never replace a newer one.
+- The push is best effort (short timeout, no retry). Every heartbeat reply also
+  carries the same object as `menu`, so the device catches up within one
+  heartbeat after a lost push or its own reboot. Reply `200` (the body is not
+  used); the reference firmware answers `{"ok": true, "applied": <bool>}`.
+- Menus are RAM-only on both sides. While a receipt for the menu is printing the
+  menu is not open yet; Adventure closes its menu while it prints the next node.
+
+The reference firmware shows the menu title, the label at the current position
+in large text (or "Nothing here"), and the menu's positions as dots. Firmware
+without a display can ignore both the endpoint (`404`) and the field.
 
 ## Print jobs (container → device)
 

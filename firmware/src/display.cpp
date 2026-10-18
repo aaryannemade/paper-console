@@ -8,6 +8,7 @@
 
 #include "channels.h"
 #include "inputs.h"
+#include "menu.h"
 #include "netmgr.h"
 #include "relay.h"
 #include "timekeeping.h"
@@ -39,7 +40,7 @@ volatile bool g_resetting = false;
 volatile bool g_resettingDrawn = false;
 uint8_t g_lastFrame[kWidth * kHeight / 8];
 
-enum class Screen { Resetting, Reset, Channel, Setup, Printing, Problem, Idle };
+enum class Screen { Resetting, Reset, Channel, Menu, Setup, Printing, Problem, Idle };
 
 // --- text helpers -------------------------------------------------------------
 
@@ -168,6 +169,23 @@ void drawPositionDots(int position) {
   }
 }
 
+// Large centred text, wrapped to two lines (then three smaller ones, then
+// "..."). `oneLine`/`twoLines`/`threeLines` are the first baselines used.
+void drawLabel(const String& label, int oneLine, int twoLines, int threeLines) {
+  std::vector<std::vector<uint16_t>> lines;
+  auto text = decodeUtf8(label);
+  g_oled.setFont(kLarge);
+  if (wrap(text, 2, &lines)) {
+    int top = lines.size() == 1 ? oneLine : twoLines;
+    for (size_t i = 0; i < lines.size(); ++i) drawCentered(top + i * 17, lines[i]);
+    return;
+  }
+  g_oled.setFont(kMedium);
+  wrap(text, 3, &lines);
+  int top = lines.size() == 3 ? threeLines : twoLines + 5;
+  for (size_t i = 0; i < lines.size(); ++i) drawCentered(top + i * 12, lines[i]);
+}
+
 // No header: the name (or number) and the position dots are the whole screen.
 // Text is centred vertically in the area above the dots (y 0-55).
 void drawChannel(int position) {
@@ -178,20 +196,31 @@ void drawChannel(int position) {
     snprintf(digits, sizeof(digits), "%d", position);
     g_oled.drawStr((kWidth - g_oled.getStrWidth(digits)) / 2, 44, digits);
   } else {
-    std::vector<std::vector<uint16_t>> lines;
-    auto text = decodeUtf8(name);
-    g_oled.setFont(kLarge);
-    if (wrap(text, 2, &lines)) {
-      int top = lines.size() == 1 ? 35 : 26;
-      for (size_t i = 0; i < lines.size(); ++i) drawCentered(top + i * 17, lines[i]);
-    } else {
-      g_oled.setFont(kMedium);
-      wrap(text, 3, &lines);
-      int top = lines.size() == 3 ? 20 : 26;
-      for (size_t i = 0; i < lines.size(); ++i) drawCentered(top + i * 12, lines[i]);
-    }
+    drawLabel(name, 35, 26, 20);
   }
   drawPositionDots(position);
+}
+
+// An open server menu: small title, the option under the knob in large text,
+// and the menu's slots along the bottom (filled = option, dot = empty slot,
+// underline = knob position).
+void drawMenu(int position, const menu::State& m) {
+  g_oled.setFont(kSmall);
+  drawCentered(9, m.title.isEmpty() ? String("Menu") : m.title);
+  int index = position - 1;
+  if (m.valid[index]) {
+    drawLabel(m.labels[index].isEmpty() ? String("Option ") + position : m.labels[index], 38, 30, 25);
+  } else {
+    g_oled.setFont(kMedium);
+    drawCentered(36, String("Nothing here"));
+  }
+  const int size = 4, gap = 6;
+  int x = (kWidth - (menu::kPositions * size + (menu::kPositions - 1) * gap)) / 2;
+  for (int i = 0; i < menu::kPositions; ++i, x += size + gap) {
+    if (m.valid[i]) g_oled.drawBox(x, 57, size, size);
+    else g_oled.drawBox(x + 1, 58, 2, 2);
+    if (i == index) g_oled.drawHLine(x - 1, 63, size + 2);
+  }
 }
 
 void drawSetup() {
@@ -310,12 +339,17 @@ void displayTask(void*) {
     uplink::LinkState link = uplink::state();
     bool wifi = netmgr::staConnected();
 
+    menu::State openMenu = menu::current();
+    bool turned = lastTurn && now - lastTurn < kChannelShowMs;
+
+    // While a menu is open the knob picks menu options, not channels.
     if (g_resetting) screen = Screen::Resetting;
     else if (resetStep > 0) screen = Screen::Reset;
-    else if (lastTurn && now - lastTurn < kChannelShowMs) screen = Screen::Channel;
+    else if (turned) screen = openMenu.active ? Screen::Menu : Screen::Channel;
     else if (netmgr::apActive()) screen = Screen::Setup;
     else if (printer.uartReady && printer.activeJobId.length()) screen = Screen::Printing;
     else if (!wifi || !link.ok || !printer.uartReady) screen = Screen::Problem;
+    else if (openMenu.active) screen = Screen::Menu;
     else screen = Screen::Idle;
 
     if (screen != lastScreen) {
@@ -328,6 +362,7 @@ void displayTask(void*) {
       case Screen::Resetting: drawResetting(); break;
       case Screen::Reset: drawReset(resetStep); break;
       case Screen::Channel: drawChannel(position); break;
+      case Screen::Menu: drawMenu(position, openMenu); break;
       case Screen::Setup: drawSetup(); break;
       case Screen::Printing: drawPrinting(now); break;
       case Screen::Problem:

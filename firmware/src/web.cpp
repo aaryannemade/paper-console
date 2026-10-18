@@ -10,6 +10,7 @@
 #include "channels.h"
 #include "health.h"
 #include "inputs.h"
+#include "menu.h"
 #include "netmgr.h"
 #include "portal_html.h"
 #include "relay.h"
@@ -396,6 +397,26 @@ esp_err_t handleChunk(httpd_req_t* req) {
   return sendJson(req, code, out);
 }
 
+// --- Menu display (container -> device) ------------------------------------
+
+constexpr size_t kMaxMenuBytes = 4096;
+
+esp_err_t handleMenu(httpd_req_t* req) {
+  if (!authorized(req)) {
+    return unauthorized(req);
+  }
+  String body;
+  if (!readBody(req, kMaxMenuBytes, body)) {
+    return sendJson(req, 413, "{\"error\":\"body too large or unreadable\"}");
+  }
+  JsonDocument doc;
+  if (deserializeJson(doc, body) || !doc["seq"].is<uint64_t>()) {
+    return sendJson(req, 400, "{\"error\":\"invalid menu\"}");
+  }
+  bool applied = menu::apply(doc.as<JsonVariantConst>(), "push");
+  return sendJson(req, 200, applied ? "{\"ok\":true,\"applied\":true}" : "{\"ok\":true,\"applied\":false}");
+}
+
 // --- Captive portal / 404 --------------------------------------------------
 
 esp_err_t handleNotFound(httpd_req_t* req, httpd_err_code_t) {
@@ -427,7 +448,7 @@ void route(const char* uri, httpd_method_t method, esp_err_t (*handler)(httpd_re
 void begin() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
-  config.max_uri_handlers = 12;
+  config.max_uri_handlers = 16;
   config.stack_size = 8192;
   config.uri_match_fn = httpd_uri_match_wildcard;
   config.lru_purge_enable = true;
@@ -448,6 +469,7 @@ void begin() {
   route("/jobs/*", HTTP_POST, handleJobPost);
   route("/jobs/*", HTTP_PUT, handleChunk);
   route("/jobs/*", HTTP_GET, handleJobGet);
+  route("/menu", HTTP_POST, handleMenu);
   httpd_register_err_handler(g_server, HTTPD_404_NOT_FOUND, handleNotFound);
   Serial.println("[web] HTTP server on port 80");
 }

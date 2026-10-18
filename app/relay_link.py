@@ -415,13 +415,85 @@ def device_clock() -> dict:
     }
 
 
+class MenuPusher:
+    """Pushes the open menu (selection mode) to the device's `POST /menu`.
+
+    Latest state wins: one background worker sends only the newest snapshot.
+    Failures are logged and otherwise ignored; every heartbeat reply carries the
+    same snapshot, so the device catches up within one interval or after reboot.
+    """
+
+    TIMEOUT = (2.0, 3.0)
+
+    def __init__(self, device_link: "DeviceLink", session=None):
+        import requests
+
+        self._link = device_link
+        self._session = session or requests.Session()
+        self._wake = threading.Event()
+        self._lock = threading.Lock()
+        self._latest: Optional[dict] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def push(self, snapshot: dict) -> None:
+        with self._lock:
+            self._latest = snapshot
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name="menu-push", daemon=True)
+                self._thread.start()
+        self._wake.set()
+
+    def _run(self) -> None:
+        while True:
+            self._wake.wait()
+            self._wake.clear()
+            with self._lock:
+                snapshot, self._latest = self._latest, None
+            if snapshot is not None:
+                self._send(snapshot)
+
+    def _send(self, snapshot: dict) -> None:
+        try:
+            token = get_relay_token()
+        except RelayTokenError:
+            return
+        base_url = self._link.base_url()
+        if not token or not base_url:
+            return  # No device yet; the first heartbeat reply delivers the menu.
+        try:
+            response = self._session.post(
+                f"{base_url}/menu",
+                json=snapshot,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=self.TIMEOUT,
+            )
+            if response.status_code >= 400:
+                logger.info("Device menu push answered HTTP %s", response.status_code)
+        except Exception as exc:  # requests errors; the heartbeat reconciles.
+            logger.info("Device menu push failed: %s", type(exc).__name__)
+
+
+def _install_menu_push() -> MenuPusher:
+    from app import selection_mode
+
+    pusher = MenuPusher(link)
+    selection_mode.add_menu_listener(pusher.push)
+    return pusher
+
+
+menu_pusher = _install_menu_push()
+
+
 @router.post("/api/device/heartbeat", dependencies=[Depends(require_relay_token)])
 def post_heartbeat(heartbeat: Heartbeat):
     """Device identity, callback URL, printer state and limits; send every interval."""
+    from app.selection_mode import menu_snapshot
+
     reply = link.record_heartbeat(heartbeat)
     # The device fetches /api/device/channels when this differs from its copy.
     reply["channels_hash"] = channel_names_hash()
     reply["clock"] = device_clock()
+    reply["menu"] = menu_snapshot()
     return reply
 
 
