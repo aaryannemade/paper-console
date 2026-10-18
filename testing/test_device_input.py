@@ -1,4 +1,4 @@
-"""Device input events from the ESP32 relay (migration Step 3b)."""
+"""Device input events from the ESP32 relay."""
 
 import asyncio
 import time

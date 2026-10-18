@@ -1,7 +1,7 @@
 // Paper Console ESP32-S3 relay (XIAO ESP32S3).
 //
 // Receives rendered receipts from the Paper Console container over WiFi and
-// writes them to the CSN-A2 printer UART; see docs/relay-protocol.md.
+// writes them to the CSN-A2 printer UART; see "Relay Protocol" in readme.md.
 // Setup: join the "PaperConsole-XXXXXX" WiFi network and fill in the page.
 #include <Arduino.h>
 

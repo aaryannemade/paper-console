@@ -2,7 +2,7 @@
 
 Pure functions that turn rendered receipts into printer bytes. No I/O: the same
 bytes are written to a USB serial port in development and relayed by the ESP32 in
-production. See docs/printer-uart-reference.md for the reasoning behind the framing.
+production. See "Printer UART" in readme.md for the reasoning behind the framing.
 """
 
 from typing import Iterator, Optional

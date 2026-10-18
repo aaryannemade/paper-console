@@ -1,7 +1,7 @@
 """Shared bearer token between the container and the ESP32 relay.
 
 One device, one token, used in both directions: the ESP32 sends it on input
-events (and, from Step 3c, heartbeats and job status), and the container sends it
+events, heartbeats and job status, and the container sends it
 on print jobs. It is separate from the settings password.
 
 Resolution: ``PC1_RELAY_TOKEN``, else the file named by ``PC1_RELAY_TOKEN_FILE``

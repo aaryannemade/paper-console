@@ -6,8 +6,11 @@
 > settings UI and API, renders every receipt and decides what inputs mean. A
 > Seeed XIAO ESP32S3 provisions WiFi (captive portal), relays the rotary
 > encoder/button, shows the channel, menus and a clock on an optional OLED, and
-> writes the receipts it is sent to a CSN-A2 thermal printer over TTL UART. See
-> [the migration plan](docs/container-esp32-plan.md) for design history.
+> writes the receipts it is sent to a CSN-A2 thermal printer over TTL UART.
+> Compared with the original Raspberry Pi appliance, the server no longer
+> touches GPIO, WiFi, the host OS (SSH, passwords, clock, reboot, updates) or
+> serial ports, and prints no setup/welcome receipts; those jobs belong to the
+> container host and the relay firmware.
 
 ---
 
@@ -80,7 +83,7 @@ or Exit.
 - Holding 5 s while a menu is open reopens Quick Actions instead.
 
 Without hardware, `just device ...` sends the same input events (see
-[the relay protocol](docs/relay-protocol.md#development)).
+[Developing against the protocol](#developing-against-the-protocol)).
 
 To start over, stop the stack and clear the **dedicated host directory** mounted
 as `/data`, then start it again. This removes saved settings, Adventure progress
@@ -98,9 +101,6 @@ the host directory writable by the configured PUID/PGID when recreating it.
 Project commands assume a Unix-like shell environment. On Windows, use WSL.
 
 #### Nix development shell
-
-The proposed container/ESP32-S3 migration is documented in
-[the migration plan](docs/container-esp32-plan.md).
 
 With Nix installed and the `nix-command` and `flakes` features enabled:
 
@@ -164,12 +164,12 @@ handed to the output selected by `PC1_PRINTER_OUTPUT`:
 The ESP32 UART output downloads 64-row bitmap bands into printer RAM before
 printing them (`GS *` / `GS /`), avoiding the stretch and pale dithering seen
 with streaming raster commands at 9600 baud. Native USB retains its 24-row
-`GS v 0` format. See [printer UART reference](docs/printer-uart-reference.md)
-for calibration results and remaining band-boundary seams.
+`GS v 0` format. See [Printer UART](#printer-uart) for the format and
+calibration results.
 
 | Value | Use | Behavior |
 | --- | --- | --- |
-| `esp32` | Production (default) | Pushes jobs to the ESP32-S3 relay over HTTP ([protocol](docs/relay-protocol.md)). Needs `PC1_RELAY_TOKEN` and heartbeats from the device; `PC1_RELAY_URL` optionally pins the device URL. Develop against `just relay-sim`. |
+| `esp32` | Production (default) | Pushes jobs to the ESP32-S3 relay over HTTP ([protocol](#6-relay-protocol-container--esp32)). Needs `PC1_RELAY_TOKEN` and heartbeats from the device; `PC1_RELAY_URL` optionally pins the device URL. Develop against `just relay-sim`. |
 | `console` | Development (`just backend` default) | Logs `[PRINT]` text lines plus a `[RECEIPT]` line with size and byte count. Set `PC1_PRINT_CAPTURE_DIR` to also save each receipt as PNG. |
 | `usb` | Development only | Prints directly to a native USB printer-class device (such as the Gprinter GP-58) through libusb. If none is connected, tries a USB-to-serial (TTL) adapter. Set `PC1_PRINTER_PORT` to select a serial adapter explicitly (`/dev/serial/by-id/*`, `/dev/ttyUSB*`, `/dev/ttyACM*`; baud rate defaults to 9600). For multiple native printers, select one with `PC1_PRINTER_USB_VENDOR_ID` and `PC1_PRINTER_USB_PRODUCT_ID` (hex). USB printer-class devices do not use the UART baud setting. |
 
@@ -338,7 +338,40 @@ or the server address after running `just frontend-build`.
 * **Reordering:** 
   * **Channels:** Use Up/Down arrows next to Channel title to swap entire channels
   * **Modules:** Use arrow buttons within a channel card to change print order
-* **Scheduled Printing:** Click the clock icon on any channel to schedule automatic printing at specific times
+* **Scheduled Printing:** See [Scheduling](#scheduling).
+
+### Scheduling
+
+Click the clock icon on a channel to print it automatically. Each channel holds
+`schedule_rules`, e.g. `[{"expression": "30 14 * * *", "enabled": true}]`, using
+5-field cron (`minute hour day month weekday`, Sunday = 0):
+
+| Expression | Meaning |
+| --- | --- |
+| `30 14 * * *` | Every day at 14:30 |
+| `0 9 * * 1-5` | Weekdays at 09:00 |
+| `0 9 * * 0,6` | Weekends at 09:00 |
+| `0 8 1 * *` | Day 1 of each month at 08:00 |
+| `0 8,12,18 * * *` | Three times daily |
+
+- Rules always run in the **timezone from General Settings**; per-rule timezones
+  are not supported (a pasted `CRON_TZ=`/`TZ=` prefix is stripped).
+- The scheduler (`scheduler_loop()` in `app/main.py`) checks every 10 s but
+  evaluates each minute once; a channel prints at most once per matching minute
+  even if rules overlap. Invalid rules are skipped with a warning. A due print
+  is skipped while the printer is busy.
+- Weather modules on scheduled channels are fetched 2–4 minutes early so the
+  print is not delayed by a slow API.
+- The schedule editor (`web/src/components/ScheduleModal.jsx`) builds the cron
+  expression from a frequency and time; "Advanced (cron expression)" allows raw
+  editing with validation, and sub-hourly schedules show a paper-use warning.
+  Descriptions follow the 12h/24h setting and are never stored.
+- API: `POST /api/channels/{position}/schedule` with
+  `{"rules": [{"expression": "30 9 * * *", "enabled": true}]}`; invalid
+  expressions return 400. The legacy `["09:30", "14:45"]` form and old
+  `schedule` lists are converted to cron rules (the first edit rewrites them).
+  Helpers live in `app/schedule_utils.py`; tests in `testing/test_schedule.py`
+  and `testing/test_scheduler_integration.py`.
 
 ### Module Types
 
@@ -362,9 +395,7 @@ unavailable. Failed UI polls also mark retained status stale.
 **Physical printer status is unknown:** UART readiness/completion does not prove
 power, paper or successful physical printing. No unvalidated status-query bytes
 are sent to the printer. Firmware health contains no credentials or configured
-server URL. See [the health contract](docs/relay-protocol.md#firmware-health-and-settings-telemetry-schema-1)
-and the [combined hardware acceptance checklist](docs/hardware-acceptance.md)
-for health, channel synchronization and encoder-reset testing.
+server URL. See [Device health](#device-health) for the fields.
 
 Webhook clients can poll `GET /api/printer/status` without authentication. It returns
 `{"ready": true, "reason": "idle"}` when the printer driver is available and no
@@ -395,7 +426,7 @@ For production deployments, configure these environment variables:
   If neither is set, a random password is generated on first start, saved to `.device_password` (mode 0600; override the path with `PC1_GENERATED_PASSWORD_FILE`), and printed once in the server log.
   The password is an application credential only; it is not synced to OS accounts, and changing it means changing the environment/secret and restarting.
 * **`PC1_RELAY_URL`**: Optional fixed base URL of the ESP32 (otherwise the `callback_url` from its heartbeat is used).
-* **`PC1_RELAY_TOKEN`** / **`PC1_RELAY_TOKEN_FILE`**: Shared bearer token for the ESP32 relay (at least 16 characters), used in both directions. Without it, `/api/device/events` answers 503. See [docs/relay-protocol.md](docs/relay-protocol.md).
+* **`PC1_RELAY_TOKEN`** / **`PC1_RELAY_TOKEN_FILE`**: Shared bearer token for the ESP32 relay (at least 16 characters), used in both directions. Without it, `/api/device/events` answers 503. See [Relay Protocol](#6-relay-protocol-container--esp32).
 * **`PC1_SESSION_SECRET`**: Optional key for signing login cookies. Defaults to the password, so changing the password logs out existing sessions.
 * **Settings Login Sessions**: The web UI can remember a browser with a signed `HttpOnly` session cookie so users do not need to re-enter the password on every visit.
 * **`PC1_CORS_ORIGINS`**: Comma-separated CORS origins (default is local/dev origins only).
@@ -480,7 +511,6 @@ paper-console/
 │   ├── relay_simulator.py      # ESP32 reference device for local tests
 │   ├── device_event.py         # Local ESP32 input-event client
 │   └── artifacts/
-├── docs/                       # Relay protocol, UART reference, scheduling, hardware tests
 ├── icons/                      # Icon source assets
 ├── images/                     # Product photos used in the README
 ├── .github/workflows/          # docker-image.yml: builds and publishes the image
@@ -539,8 +569,8 @@ paper-console/
 The server never accesses GPIO or provisions a host serial port. For development,
 use `console`, connect a printer over native USB, or use a USB-to-TTL serial
 adapter with `PC1_PRINTER_OUTPUT=usb`. For the ESP32 relay protocol, serial framing and
-electrical considerations, see [printer UART reference](docs/printer-uart-reference.md)
-and [relay protocol](docs/relay-protocol.md).
+electrical considerations, see [Relay Protocol](#6-relay-protocol-container--esp32)
+and [Printer UART](#printer-uart).
 
 ### ESP32-S3 relay firmware (`firmware/`)
 
@@ -665,7 +695,307 @@ These were measured on the hardware and accepted:
 
 ---
 
-## 6. Troubleshooting
+## 6. Relay Protocol (Container ↔ ESP32)
+
+This is the contract between the container and the relay. The container side is
+`app/relay_link.py`, `app/device_input.py` and
+`app/drivers/esp32_relay_output.py`; the device side is `firmware/` and its
+reference implementation `testing/relay_simulator.py`, which the container tests
+run against. Keep all three and this section in step.
+
+```text
+Button / rotary encoder -> ESP32-S3 --HTTP input event--> container
+CSN-A2 printer <- TTL UART <- ESP32-S3 <--HTTP print job-- container
+```
+
+The **container** owns channel selection, what gestures mean, menus and
+interactive modules, scheduling, content and CSN-A2 command generation. The
+**firmware** owns input sampling/debouncing, WiFi provisioning, link reporting,
+bounded buffering and UART pacing; it never renders receipts or knows module
+logic. Scheduled, email and Slack prints use the same container-initiated push.
+Both directions must be reachable on the LAN (Docker port mapping for
+device → container; outbound LAN access for container → device).
+
+| Direction | Requests |
+| --- | --- |
+| Device → container | `POST /api/device/heartbeat`, `POST /api/device/events`, `GET /api/device/channels`, `POST /api/device/jobs/{id}/status` |
+| Container → device | `POST /jobs`, `PUT /jobs/{id}/chunks/{n}`, `POST /jobs/{id}/cancel`, `GET /jobs/{id}`, `POST /menu` |
+| Public on the device | `GET /health`, the settings page (`/`, `/ui/*`) |
+
+### Authentication
+
+One shared bearer token, `Authorization: Bearer <token>`, in both directions.
+The container reads `PC1_RELAY_TOKEN` or `PC1_RELAY_TOKEN_FILE` (at least 16
+characters, no whitespace; an unusable configured token stops startup). Without
+one, device endpoints answer `503`. The relay gets the same token in its setup
+page. The token is separate from the settings password. Generate one with
+`openssl rand -hex 24`. The device answers `401` to a missing or wrong token.
+
+### Input events (device → container)
+
+`POST /api/device/events`, one at a time:
+
+```json
+{"event_id": "a3f9c2-41", "type": "position", "position": 5}
+{"event_id": "a3f9c2-42", "type": "button", "gesture": "press", "press_id": "a3f9c2-17", "position": 5}
+```
+
+| Field | Rules |
+| --- | --- |
+| `event_id` | 1–64 chars, unique **across reboots** (random boot id + counter). |
+| `type` | `position` (absolute 1–8, sent whenever it changes) or `button`. |
+| `position` | Required for `position`; optional but recommended on `button` (applied first, so a lost position event cannot misdirect a press). |
+| `gesture` | `press` (released before 5 s), `hold` (5 s reached, sent once), `hold_release` (released after `hold`), `hold_cancel` (the device kept the press for a local action, e.g. its reset sequence at 10 s; never followed by `hold_release`). |
+| `press_id` | String or integer, 1–64 chars; the same for every gesture of one press. |
+
+Unknown fields are ignored; malformed events get `422`.
+
+| Gesture | Container state | Result |
+| --- | --- | --- |
+| `press` | Menu open | `selection`, or `selection_ignored` for a position that is not an option (nothing prints) |
+| `press` | Otherwise | `printing_channel` |
+| `hold` | Printing | `cancel_requested`: stops at the next band boundary; the rest of the press is ignored |
+| `hold` | Idle | `hold_ready`: short paper feed ("release now") |
+| `hold_release` | After `hold_ready` | `quick_actions`: prints and opens Quick Actions |
+| `hold_cancel` | Any | `hold_cancelled`: releases the armed hold; a later `hold_release` is ignored |
+
+Other results (all HTTP `200`): `position_set`; `busy` (another job holds the
+printer, or a press within 3 s of the last print; nothing is queued);
+`printer_unavailable`; `ignored_consumed` (`hold_release` of a press that
+cancelled a print or was `hold_cancel`led); `not_ready` (server starting);
+`error` (logged). Response:
+`{"event_id": "...", "result": "printing_channel", "position": 5, "duplicate": false}`,
+returned as soon as the gesture is interpreted.
+
+Delivery rules: send in order and wait for each response; on a timeout retry the
+**same** `event_id` (the container remembers the last 256 and answers with the
+original result and `"duplicate": true`); drop events older than a few seconds
+instead of replaying them (the reference firmware drops after 5 s); on `401`/`503`
+show the error and back off. Debouncing and the 5 s threshold are firmware jobs.
+
+### Heartbeat (device → container)
+
+`POST /api/device/heartbeat` every `heartbeat_interval_s`, and immediately after
+boot, WiFi reconnect and any `printer.state` change:
+
+```json
+{"device_id": "pc1-a1b2c3", "boot_id": "7f3e91c0d2aa", "firmware": "0.1.0",
+ "callback_url": "http://192.168.1.50",
+ "printer": {"state": "ready", "detail": null, "width_dots": 384, "baudrate": 9600},
+ "limits": {"max_chunk_bytes": 8192, "max_job_bytes": 1048576},
+ "active_job_id": null, "health": {"schema_version": 1, "...": "..."}}
+```
+
+| Field | Rules |
+| --- | --- |
+| `device_id` / `boot_id` | 1–64 chars; `boot_id` is new on every boot (a change means the device restarted). |
+| `callback_url` | Device base URL as reachable **from the container** (http/https, no credentials/query/fragment). `PC1_RELAY_URL` can pin it instead. |
+| `printer.state` | `ready`, `busy`, `paper_out`, `error` or `offline`; only `ready`/`busy` accept jobs. `detail` ≤200 chars. |
+| `printer.width_dots` / `baudrate` | 8–2048 (wider receipts are rejected) / 1200–921600 (sizes job timeouts). |
+| `limits.max_chunk_bytes` | 256 B–1 MiB. A framed 64-row band is 3,081 bytes at 384 dots; smaller limits shorten bands in multiples of 8 rows (minimum 393 bytes). |
+| `limits.max_job_bytes` | 1 KiB–64 MiB. |
+| `active_job_id` | Job being processed, if any. |
+| `health` | Optional [health object](#device-health). |
+
+Response:
+
+```json
+{"heartbeat_interval_s": 10, "heartbeat_timeout_s": 30,
+ "channels_hash": "3f1c9a0b7d2e4c61",
+ "clock": {"utc_offset_s": 19800, "time_format": "12h"},
+ "menu": {"seq": 1792345679000000, "active": false}}
+```
+
+The container considers the device offline after `heartbeat_timeout_s` without a
+heartbeat or as soon as a push fails; the next heartbeat brings it back.
+`clock` is the configured timezone's current UTC offset (DST applied) and the
+12h/24h preference; the device takes UTC from NTP and adds the offset, so
+timezone and DST changes arrive within one heartbeat.
+
+### Channel names (device ← container)
+
+`channels_hash` is a 16-hex hash of the eight names in order; it changes only
+when a name changes. When it differs from the device's copy (or after boot),
+fetch `GET /api/device/channels`:
+
+```json
+{"hash": "3f1c9a0b7d2e4c61",
+ "channels": [{"position": 1, "name": ""}, {"position": 2, "name": "Work update"}, ...]}
+```
+
+Store the names with **this** `hash` (a name may change between the two
+requests). On failure keep the old copy and retry next heartbeat. Names are
+UTF-8, ≤24 characters, `""` = unnamed; RAM only on the device.
+
+### Menu display (container → device)
+
+While a menu is open a press chooses an option instead of printing the channel.
+The container pushes the state whenever a menu opens or closes:
+
+```json
+POST /menu
+{"seq": 1792345678901234, "active": true, "title": "Quick actions",
+ "options": [{"position": 1, "label": "Table of contents"},
+             {"position": 2, "label": "System monitor"},
+             {"position": 8, "label": "Cancel"}]}
+```
+
+- `options` lists only positions that act; others are `selection_ignored`.
+  Titles ≤24 characters, labels ≤48 (UTF-8).
+- `seq` increases on every change, also across container restarts (wall-clock
+  microseconds). **Keep a state only if its `seq` is higher than the one held.**
+- The push is best effort (short timeout, no retry); every heartbeat reply
+  carries the same object as `menu`, so the device catches up within one
+  heartbeat or after rebooting. The reference firmware answers
+  `{"ok": true, "applied": <bool>}`; firmware without a display may `404`.
+- RAM only on both sides. A menu opens after its receipt has printed; Adventure
+  closes its menu while printing the next node.
+
+### Print jobs (container → device)
+
+A receipt becomes **records**, each self-contained printer data: the `FS .`
+preamble, one record per 64-row bitmap band (see [Printer UART](#printer-uart)),
+and the cutter feed (`ESC J`). The device writes records to the UART
+**unchanged and in order** and never parses them. Cancellation happens only
+**between** records. Tactile feeds (`kind: "feed"`) are tiny jobs the container
+does not wait for.
+
+**1. Create:** `POST /jobs`
+`{"job_id": "3f2a…", "kind": "receipt", "chunks": 3, "records": 24, "bytes": 25184}`
+(`bytes` = all chunk bodies; `job_id` 1–64 chars of `[A-Za-z0-9_-]`).
+
+| Response | When |
+| --- | --- |
+| `201` + status | Created. |
+| `200` + status | Same id exists; never start it twice. |
+| `409` | Another job is active (the container retries for 3 s). |
+| `413` / `503` / `400` | Too large / printer not ready / malformed. |
+
+**2. Chunks:** `PUT /jobs/{id}/chunks/{index}`, `application/octet-stream`,
+header `X-PC1-Final-Chunk: 0|1`, body = `[2-byte big-endian length][record]`
+repeated. Sent in order from 0; records never span chunks; bodies ≤
+`max_chunk_bytes`. Printing may start with the first chunk.
+
+| Response | When |
+| --- | --- |
+| `200` | Accepted; a resent index returns `"duplicate": true` and is not printed again. |
+| `429` + `Retry-After-Ms` | Buffer full; the container backs off (≤2 s each, 15 s total) and resends. Use this instead of blocking while the UART drains. |
+| `409` / `404` | Out of order or job finished / unknown job (e.g. after a reboot; the job fails). |
+| `413` / `400` | Body too large / bad framing. |
+
+**3. Status:** device → `POST /api/device/jobs/{id}/status`
+`{"state": "printing", "boot_id": "...", "records_written": 1, "bytes_written": 2}`.
+States: `receiving`, `printing` (report once when writing starts),
+`completed` (all records written and the UART drained: delivery, **not** proof
+of paper), `cancelled` (skip the cutter feed), `failed` (with `error` ≤300
+chars). Final states never change; `404` means stop reporting that job.
+
+**4. Cancel:** `POST /jobs/{id}/cancel`: stop after the current record, report
+`cancelled`, answer `200` with the status even if already finished.
+
+**5. Poll:** `GET /jobs/{id}` returns the status body or `404`. The container
+polls every 5 s in case a callback was lost; keep the last few finished jobs.
+
+Rules:
+
+- **One job at a time.** The container holds its print reservation until a
+  final state. The device must keep serving events, heartbeats and status while
+  printing (UART writer separate from the HTTP server).
+- **Timeouts:** 30 s plus twice the theoretical UART time
+  (`bytes × 10 / baudrate`), then the job fails and a cancel is sent.
+- **No replay:** a reboot mid-job (new `boot_id`) fails the job and nothing is
+  resent; the device never resumes jobs. Status reports with another `boot_id`
+  are ignored.
+- **Offline:** prints are skipped, not queued (UI/API `503`; scheduled, email and
+  Slack prints logged and dropped). The first print after a silent disappearance
+  fails when its push fails.
+
+### Device health
+
+`GET /health` on the relay is public (HTTP 200, `Cache-Control: no-store`) and
+reads cached state only. Schema 1 fields: `schema_version`, `device_id`,
+`boot_id`, `firmware`, `uptime_s` (64-bit timer), `status`, `wifi_connected`,
+`server_state` (`connected`/`disconnected`/`unknown`), `server_detail`,
+`server_last_ok_s` (-1 = never), `uart_ready`, `physical_printer` (always
+`unknown`), `active_job_id`/`_state`, `last_job_id`/`_state`/`_error` (RAM only),
+and optional `display` (`ok`/`absent`). Empty strings mean none. No token, WiFi
+password, SSID or server URL is included.
+
+`status` priority: UART/writer unavailable → `error`; WiFi or server link down
+(no acknowledgement for 30 s) → `disconnected`; active job → `printing`; last
+job failed → `error`; otherwise `ready`. The same object appears in `/ui/status`
+and in heartbeats. The container's `GET /api/printer/link` (admin) adds
+`health_stale` (report older than 20 s, missing heartbeats or offline link);
+old firmware reports `health: null`.
+
+### Printer UART
+
+| Item | ESP32-S3 to CSN-A2 |
+| --- | --- |
+| UART | Hardware UART1, **9600 8N1**, no flow control; not the USB log console. |
+| TX / RX | XIAO TX (GPIO43) → printer RX; printer TX → GPIO44 (optional; GPIO is **not 5 V tolerant**). |
+| Busy (DTR) | Not wired or read; paper-out and power are unknown to the relay. |
+| Power | Common ground; separate printer supply rated for ≥4–5 A peaks. |
+| Paper | 58 mm, 384 dots at 203 dpi (48 bytes per row). |
+
+On boot (never on container start) the firmware initialises the printer once:
+`00 00 00 00 00` (flush a partial command, wait 100 ms), `1B 40` (`ESC @`,
+wait 300 ms), `1C 2E` (`FS .`, cancel double-byte mode), `1B 52 00`
+(USA charset), `1B 74 00` (PC437).
+
+The container rotates the 1-bit receipt 180° for the mounting direction and
+sends independent **64-row downloaded bitmap bands**, each one record:
+`1D 2A 30 08 <3072 bytes> 1D 2F 00` (`GS * x=48 y=8` in 8-dot units,
+column-major, MSB first, set bit = black; then `GS / 0` to print at normal
+size). The printer receives each band into RAM before printing it. The last
+band is padded with up to seven white rows. The relay writes in ~128-byte
+slices and waits for the UART to drain at each band boundary. A short UART write
+fails the job with its byte count. After a successful receipt the container
+sends `ESC J 120` (five lines) for tear clearance; tactile blips use `ESC J 2`.
+
+Why 64-row bands: streaming `GS v 0` raster at 9600 baud stretched images
+vertically and lightened dithering, while the same bitmap over fast native USB
+stayed square. Slow delivery is the trigger (the printer's internal cause is
+unknown). Downloaded 24/48/64-row bands printed correctly over slow USB and
+64-row bands over the real UART (calibration squares measured 24×24 mm on both);
+128- and 256-row bands printed garbage. Heat and density stay at defaults. Native
+USB development output keeps 24-row `GS v 0` strips.
+`testing/print_raster_calibration.py --encoding downloaded --downloaded-band-rows 64`
+reprints the calibration pattern (`--output usb --usb-bytes-per-second 960` or
+`--output esp32`).
+
+### Developing against the protocol
+
+```bash
+just dev-esp32                                 # terminal 1: backend + settings UI
+just relay-sim                                 # terminal 2: simulated ESP32 at 9600 baud
+just device position 5 && just device press    # terminal 3: the device's controls
+just device quick-actions                      # hold, then hold_release
+just device hold                               # during a print: cancel
+just device hold-cancel                        # hold, then hold_cancel
+```
+
+The recipes share the development relay token `12345678901234567890` unless
+`PC1_RELAY_TOKEN` is exported. The simulator saves each received receipt, decoded
+from the raster bytes, as a PNG under `testing/artifacts/relay/`; `--baud 0`
+prints instantly, and `--port`/`--advertise-url` help if the container cannot
+reach `127.0.0.1:8090`. It also logs channel names and menus it receives.
+
+### Hardware validation
+
+On 2026-10-18 the complete system passed hardware acceptance on the XIAO
+ESP32S3, CSN-A2 printer and production container: boot/channel sync, channel
+names, health and stale-status handling, prints from the UI/button/schedule/test
+page, long-receipt responsiveness, hold-to-cancel, backend/WiFi/relay restarts
+without duplicate or replayed output, container recreation with persisted
+`/data`, the encoder and BOOT resets, the OLED screens and menus. Duplicate
+creates/chunks/events, backpressure and lost callbacks are covered by the
+simulator tests. Re-check affected items on hardware after firmware or protocol
+changes.
+
+---
+
+## 7. Troubleshooting
 
 ### Printer Issues
 * **Status dot:** The circle beside the settings title is green when the ESP32 is
@@ -675,7 +1005,8 @@ These were measured on the hardware and accepted:
   jobs; it does not prove paper is loaded. For details use the backend log,
   the ESP32 page (`http://paper-console.local/`) or `just fw-monitor`.
 * **Relay offline:** Check `GET /api/printer/link` or Printer Connection in General
-  Settings. Start `just relay-sim` to exercise the HTTP relay without firmware.
+  Settings, the relay's `http://<relay-ip>/health`, and `just fw-monitor`. Start
+  `just relay-sim` to exercise the HTTP relay without firmware.
 * **USB printer not found:** For native USB, check `lsusb`, device permissions
   (`/dev/bus/usb/BUS/DEVICE`) and any permission error in the backend log. For
   a USB-to-serial adapter, check `PC1_PRINTER_PORT` and serial access permissions

@@ -300,7 +300,7 @@ void writerTask(void*) {
 void initPrinter() {
   g_uart.setRxBufferSize(256);
   g_uart.begin(PC1_PRINTER_BAUD, SERIAL_8N1, PC1_PRINTER_RX_PIN, PC1_PRINTER_TX_PIN);
-  // docs/printer-uart-reference.md: flush any partial command (including
+  // readme.md "Printer UART": flush any partial command (including
   // boot-time noise on the TX pin), reset, then select plain ASCII mode.
   const uint8_t flush[] = {0, 0, 0, 0, 0};
   g_uart.write(flush, sizeof(flush));

@@ -1,4 +1,4 @@
-// Print jobs (docs/relay-protocol.md) and the printer UART.
+// Print jobs ("Print jobs" in readme.md) and the printer UART.
 //
 // HTTP handlers create jobs and queue chunk bodies; a dedicated writer task
 // writes each record to the UART unchanged and in order, honouring

@@ -1,6 +1,6 @@
-"""ESP32-S3 relay simulator: the device side of docs/relay-protocol.md.
+"""ESP32-S3 relay simulator: the device side of the "Relay Protocol" in readme.md.
 
-Stands in for the firmware (Step 6) during development and tests. It sends
+Stands in for the firmware in development and tests. It sends
 heartbeats to the container, accepts pushed print jobs, "writes" each record to a
 simulated UART at the configured baud rate, decodes the raster data back into the
 receipt image (saved as PNG) and reports job status.

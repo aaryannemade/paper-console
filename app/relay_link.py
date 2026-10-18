@@ -1,10 +1,10 @@
-"""Container side of the ESP32 relay link (migration Step 3c).
+"""Container side of the ESP32 relay link.
 
 The ESP32 posts a heartbeat every few seconds with its identity, boot id, the URL
 the container should push print jobs to, printer state and limits. Link status
 in the settings UI is derived from these heartbeats and from push results, not
 from WiFi association. Job status callbacks from the device wake the print
-output waiting for a job to finish. See docs/relay-protocol.md.
+output waiting for a job to finish. See "Relay Protocol" in readme.md.
 """
 
 import hashlib

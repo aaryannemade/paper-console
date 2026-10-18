@@ -21,7 +21,6 @@ web/dist
 web/dist-ssr
 testing
 testing/artifacts
-docs
 images
 scripts
 *.log

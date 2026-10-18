@@ -1,6 +1,6 @@
-"""Physical input events relayed by the ESP32 (migration Step 3b).
+"""Physical input events relayed by the ESP32.
 
-The ESP32 turns its controls into two kinds of events (see docs/relay-protocol.md):
+The ESP32 turns its controls into two kinds of events (see "Relay Protocol" in readme.md):
 
 * ``position`` — the selected channel position, 1-8 (absolute).
 * ``button`` — a gesture: ``press`` (released before 5 s), ``hold`` (5 s reached,

@@ -1,4 +1,4 @@
-// Input events to the server: POST /api/device/events (docs/relay-protocol.md).
+// Input events to the server: POST /api/device/events ("Input events" in readme.md).
 //
 // Events are queued by the input task and sent one at a time, in order, from
 // a dedicated task (heartbeats never delay a press). A timeout or connection

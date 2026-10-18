@@ -5,7 +5,7 @@ output's raster-strip writing. Not used in production (the ESP32 drives the
 printer there). Wire a serial adapter's
 TX to the printer's RX (and optionally RX to TX for status replies), at TTL level.
 The printer's DTR busy line is not available over USB; pacing relies on the
-128-byte writes and per-strip flushes described in docs/printer-uart-reference.md.
+128-byte writes and per-strip flushes described in readme.md ("Printer UART").
 
 ``PC1_PRINTER_PORT`` selects the port (default: first /dev/serial/by-id,
 /dev/ttyUSB* or /dev/ttyACM* device). ``PC1_PRINTER_BAUDRATE`` defaults to 9600.

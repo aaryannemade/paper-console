@@ -35,7 +35,7 @@ _current_module_id: Optional[str] = None
 _valid_positions: Optional[set[int]] = None
 _selection_in_progress = False
 _selection_lock = threading.Lock()
-# What the device display shows for the open menu (docs/relay-protocol.md).
+# What the device display shows for the open menu ("Menu display" in readme.md).
 _menu_title: str = ""
 _menu_labels: Dict[int, str] = {}
 _menu_seq = 0

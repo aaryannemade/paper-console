@@ -1,4 +1,4 @@
-// Channel display names from the server (docs/relay-protocol.md).
+// Channel display names from the server ("Channel names" in readme.md).
 //
 // Every heartbeat reply carries "channels_hash", a hash of the eight names.
 // When it differs from the hash of the copy held here, the uplink task fetches

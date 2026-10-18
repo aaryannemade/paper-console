@@ -10,7 +10,7 @@ The printer reservation is held until then, so jobs never overlap.
 
 Nothing is queued or replayed: if the device is offline, busy beyond a short
 retry window, restarts mid-job or times out, the job fails and is logged.
-See docs/relay-protocol.md.
+See "Relay Protocol" in readme.md.
 """
 
 import logging

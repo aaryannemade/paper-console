@@ -1,5 +1,5 @@
 // The server's open menu (Quick Actions, app selection, Adventure choices) for
-// the OLED; see docs/relay-protocol.md "Menu display".
+// the OLED; see "Menu display" in readme.md.
 //
 // The container pushes it to POST /menu whenever a menu opens or closes, and
 // every heartbeat reply repeats it. Updates are kept only if their `seq` is

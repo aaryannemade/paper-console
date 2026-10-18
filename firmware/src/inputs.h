@@ -3,7 +3,7 @@
 // The knob selects the channel position 1-8: one detent per step, clockwise
 // increases, wrapping 8 -> 1 and 1 -> 8. The position starts at 1 on every
 // boot (not saved) and is sent to the server whenever the link comes up. The
-// button reports gestures as in docs/relay-protocol.md: press (released
+// button reports gestures as in readme.md ("Input events"): press (released
 // before 5 s), hold (5 s reached), hold_release.
 //
 // Reset sequence (same effect as holding BOOT 5 s: erase settings, reopen

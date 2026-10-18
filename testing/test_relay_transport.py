@@ -1,4 +1,4 @@
-"""ESP32 relay print transport against the simulator (migration Step 3c).
+"""ESP32 relay print transport against the simulator.
 
 Both directions use real HTTP: the container's relay endpoints run in a Uvicorn
 thread, the simulator runs its own HTTP server and posts heartbeats/status back.

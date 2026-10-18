@@ -1,6 +1,6 @@
 """Send ESP32-style input events to a running server (development helper).
 
-Acts as the device's controls until the firmware exists (Step 6). Uses the
+Acts as the device's controls without hardware. Uses the
 shared token from PC1_RELAY_TOKEN.
 
   python testing/device_event.py position 5        # select channel 5
